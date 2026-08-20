@@ -15,3 +15,7 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 `document::TextReader` 使用固定大小缓冲区读取原文，并通过回调输出不跨越 UTF-8
 字符边界的文本块。非法 UTF-8 默认替换为 U+FFFD，也可使用严格模式在首个错误的
 原始字节偏移处终止。回调收到的 `string_view` 只在本次回调期间有效。
+
+`analysis::TokenizerSession` 接受连续文本块并保留跨块 Token 状态，输出从零开始且
+严格递增的 Token 位置。第一版仅索引 ASCII 字母、数字和下划线，非 ASCII 字符作为
+分隔符；单个 Token 默认限制为 256 字节。
