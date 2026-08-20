@@ -6,6 +6,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(SNOWSEEK_BUILD_TESTS "Build SnowSeek tests" ON)
 option(SNOWSEEK_BUILD_BENCHMARKS "Build SnowSeek benchmarks" OFF)
+option(SNOWSEEK_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+function(snowseek_enable_warnings target)
+    target_compile_options(${target} PRIVATE
+        $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
+        $<$<AND:$<BOOL:${SNOWSEEK_WARNINGS_AS_ERRORS}>,$<CXX_COMPILER_ID:GNU,Clang>>:-Werror>
+    )
+endfunction()
 
 add_library(snowseek_core
     src/analysis/tokenizer.cpp
@@ -23,13 +31,12 @@ target_include_directories(snowseek_core
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
-target_compile_options(snowseek_core PRIVATE
-    $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall;-Wextra;-Wpedantic>
-)
+snowseek_enable_warnings(snowseek_core)
 
 add_executable(snowseek src/cli/main.cpp src/cli/application.cpp)
 target_link_libraries(snowseek PRIVATE SnowSeek::core)
 target_compile_features(snowseek PRIVATE cxx_std_20)
+snowseek_enable_warnings(snowseek)
 
 if(SNOWSEEK_BUILD_TESTS)
     enable_testing()

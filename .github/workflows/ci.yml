@@ -1,0 +1,32 @@
+name: CI
+
+on:
+        push:
+        pull_request:
+
+jobs:
+        build-and-test:
+                runs-on: ubuntu-latest
+                strategy:
+                        fail-fast: false
+                        matrix:
+                                compiler:
+                                        - name: GCC
+                                          cxx: g++
+                                        - name: Clang
+                                          cxx: clang++
+                                build_type: [Debug, Release]
+                name: ${{ matrix.compiler.name }} ${{ matrix.build_type }}
+                steps:
+                        - uses: actions/checkout@v4
+                        - name: Configure
+                          run: >-
+                                  cmake -S . -B build
+                                  -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+                                  -DCMAKE_CXX_COMPILER=${{ matrix.compiler.cxx }}
+                                  -DSNOWSEEK_WARNINGS_AS_ERRORS=ON
+                        - name: Build
+                          run: cmake --build build --parallel 2
+                        - name: Test
+                          working-directory: build
+                          run: ctest --output-on-failure
