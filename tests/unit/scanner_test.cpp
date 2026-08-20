@@ -8,6 +8,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -76,13 +77,15 @@ void finds_regular_files_recursively() {
         write_file(first, "first");
         write_file(second, "second");
 
-        const auto paths =
+        const auto result =
                 snowseek::filesystem::Scanner{}.scan(temporary.path());
-        snowseek::test::require_equal(paths.size(), std::size_t{2},
+        snowseek::test::require(result.errors.empty(),
+                                "a valid directory should not produce errors");
+        snowseek::test::require_equal(result.files.size(), std::size_t{2},
                                       "scanner should find both regular files");
-        snowseek::test::require(contains(paths, first),
+        snowseek::test::require(contains(result.files, first),
                                 "scanner should include the root file");
-        snowseek::test::require(contains(paths, second),
+        snowseek::test::require(contains(result.files, second),
                                 "scanner should include the nested file");
 }
 
@@ -95,20 +98,150 @@ void enforces_file_size_limit() {
 
         snowseek::filesystem::ScanOptions options;
         options.max_file_size = 4;
-        const auto paths =
+        const auto result =
                 snowseek::filesystem::Scanner{options}.scan(temporary.path());
-        snowseek::test::require_equal(paths.size(), std::size_t{1},
+        snowseek::test::require(result.errors.empty(),
+                                "size filtering should not produce errors");
+        snowseek::test::require_equal(result.files.size(), std::size_t{1},
                                       "oversized files should be excluded");
-        snowseek::test::require(contains(paths, small),
+        snowseek::test::require(contains(result.files, small),
                                 "a file at the size limit should be included");
 }
 
-void handles_missing_root() {
+void reports_missing_root() {
         const TemporaryDirectory temporary;
         const auto missing = temporary.path() / "missing";
-        const auto paths = snowseek::filesystem::Scanner{}.scan(missing);
-        snowseek::test::require(paths.empty(),
-                                "a missing root should produce no paths");
+        const auto result = snowseek::filesystem::Scanner{}.scan(missing);
+
+        snowseek::test::require(result.files.empty(),
+                                "a missing root should produce no files");
+        snowseek::test::require_equal(
+                result.errors.size(), std::size_t{1},
+                "a missing root should produce one error");
+        snowseek::test::require_equal(
+                result.errors[0].path, missing,
+                "the error should identify the missing root");
+        snowseek::test::require_equal(
+                result.errors[0].error,
+                std::make_error_code(std::errc::no_such_file_or_directory),
+                "the error should report a missing path");
+}
+
+void applies_include_and_exclude_patterns() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "src";
+        const auto generated = temporary.path() / "generated";
+        std::filesystem::create_directory(source);
+        std::filesystem::create_directory(generated);
+
+        const auto implementation = source / "main.cpp";
+        const auto header = source / "main.hpp";
+        const auto generated_source = generated / "auto.cpp";
+        const auto documentation = temporary.path() / "README.md";
+        write_file(implementation, "int main() {}");
+        write_file(header, "#pragma once");
+        write_file(generated_source, "generated");
+        write_file(documentation, "documentation");
+
+        snowseek::filesystem::ScanOptions options;
+        options.include_patterns = {"*.cpp", "*.hpp"};
+        options.exclude_patterns = {"generated/*"};
+        const auto result =
+                snowseek::filesystem::Scanner{options}.scan(temporary.path());
+
+        snowseek::test::require(result.errors.empty(),
+                                "pattern filtering should not produce errors");
+        snowseek::test::require_equal(
+                result.files.size(), std::size_t{2},
+                "only included non-generated files should remain");
+        snowseek::test::require(contains(result.files, implementation),
+                                "the implementation file should be included");
+        snowseek::test::require(contains(result.files, header),
+                                "the header file should be included");
+        snowseek::test::require(
+                !contains(result.files, generated_source),
+                "the excluded generated file should not be included");
+        snowseek::test::require(
+                !contains(result.files, documentation),
+                "files outside include patterns should not be included");
+}
+
+void returns_files_in_stable_order() {
+        const TemporaryDirectory temporary;
+        const auto last = temporary.path() / "z-last.txt";
+        const auto first = temporary.path() / "a-first.txt";
+        const auto middle = temporary.path() / "m-middle.txt";
+        write_file(last, "last");
+        write_file(first, "first");
+        write_file(middle, "middle");
+
+        const auto result =
+                snowseek::filesystem::Scanner{}.scan(temporary.path());
+        const std::vector<std::filesystem::path> expected{first, middle, last};
+
+        snowseek::test::require(result.errors.empty(),
+                                "sorting should not produce errors");
+        snowseek::test::require_equal(
+                result.files, expected,
+                "scanner output should use stable path ordering");
+}
+
+void respects_file_symlink_option() {
+        const TemporaryDirectory temporary;
+        const auto target = temporary.path() / "target.txt";
+        const auto link = temporary.path() / "link.txt";
+        write_file(target, "target");
+
+        std::error_code error;
+        std::filesystem::create_symlink(target, link, error);
+        snowseek::test::require(!error,
+                                "the test should be able to create a symlink");
+
+        const auto default_result =
+                snowseek::filesystem::Scanner{}.scan(temporary.path());
+        snowseek::test::require_equal(default_result.files.size(),
+                                      std::size_t{1},
+                                      "symlinks should be skipped by default");
+        snowseek::test::require(!contains(default_result.files, link),
+                                "the default scan should exclude a symlink");
+
+        snowseek::filesystem::ScanOptions options;
+        options.follow_symlinks = true;
+        const auto followed_result =
+                snowseek::filesystem::Scanner{options}.scan(temporary.path());
+        snowseek::test::require_equal(
+                followed_result.files.size(), std::size_t{2},
+                "enabled symlink following should include a file symlink");
+        snowseek::test::require(contains(followed_result.files, link),
+                                "the followed symlink should be returned");
+}
+
+void prevents_directory_symlink_cycles() {
+        const TemporaryDirectory temporary;
+        const auto nested = temporary.path() / "nested";
+        std::filesystem::create_directory(nested);
+        const auto file = nested / "file.txt";
+        const auto cycle = nested / "root";
+        write_file(file, "content");
+
+        std::error_code error;
+        std::filesystem::create_directory_symlink(temporary.path(), cycle,
+                                                  error);
+        snowseek::test::require(!error,
+                                "the test should create a directory symlink");
+
+        snowseek::filesystem::ScanOptions options;
+        options.follow_symlinks = true;
+        const auto result =
+                snowseek::filesystem::Scanner{options}.scan(temporary.path());
+
+        snowseek::test::require(result.errors.empty(),
+                                "a symlink cycle should not produce errors");
+        snowseek::test::require_equal(
+                result.files.size(), std::size_t{1},
+                "a physical file should only be visited once");
+        snowseek::test::require(contains(result.files, file),
+                                "the file inside the cycle should be found");
 }
 
 } // namespace
@@ -118,6 +251,14 @@ int main() {
                 {"finds regular files recursively",
                  finds_regular_files_recursively},
                 {"enforces the file size limit", enforces_file_size_limit},
-                {"handles a missing root", handles_missing_root},
+                {"reports a missing root", reports_missing_root},
+                {"applies include and exclude patterns",
+                 applies_include_and_exclude_patterns},
+                {"returns files in stable order",
+                 returns_files_in_stable_order},
+                {"respects the file symlink option",
+                 respects_file_symlink_option},
+                {"prevents directory symlink cycles",
+                 prevents_directory_symlink_cycles},
         });
 }
