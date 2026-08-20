@@ -17,6 +17,7 @@ endfunction()
 
 add_library(snowseek_core
     src/analysis/tokenizer.cpp
+    src/document/text_reader.cpp
     src/filesystem/scanner.cpp
     src/index/index_builder.cpp
     src/query/query_engine.cpp
