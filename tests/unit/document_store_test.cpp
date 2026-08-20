@@ -1,0 +1,68 @@
+#include "snowseek/document/document_store.hpp"
+
+#include "test_support.hpp"
+
+#include <cstdint>
+#include <filesystem>
+#include <stdexcept>
+
+namespace {
+
+void assigns_contiguous_document_ids() {
+        snowseek::document::DocumentStore store;
+        const auto first = store.add("first.txt", 10, 100);
+        const auto second = store.add("nested/second.cpp", 20, 200);
+
+        snowseek::test::require_equal(first, snowseek::document::DocumentId{0},
+                                      "the first document id should be zero");
+        snowseek::test::require_equal(
+                second, snowseek::document::DocumentId{1},
+                "document ids should be assigned contiguously");
+        snowseek::test::require_equal(store.size(), std::size_t{2},
+                                      "the store should track its size");
+}
+
+void stores_and_updates_document_metadata() {
+        snowseek::document::DocumentStore store;
+        const auto id = store.add("source/main.cpp", 42, 1234);
+        store.set_token_count(id, 7);
+
+        const auto &document = store.get(id);
+        snowseek::test::require_equal(document.id, id,
+                                      "stored metadata should retain its id");
+        snowseek::test::require_equal(document.path,
+                                      std::filesystem::path("source/main.cpp"),
+                                      "stored metadata should retain its path");
+        snowseek::test::require_equal(document.file_size, std::uint64_t{42},
+                                      "file size should be retained");
+        snowseek::test::require_equal(document.modified_time,
+                                      std::uint64_t{1234},
+                                      "modified time should be retained");
+        snowseek::test::require_equal(document.token_count, std::uint32_t{7},
+                                      "token count should be updateable");
+}
+
+void rejects_unknown_document_ids() {
+        snowseek::document::DocumentStore store;
+        static_cast<void>(store.add("only.txt", 1, 2));
+        const auto missing = snowseek::document::DocumentId{1};
+
+        snowseek::test::require_throws<std::out_of_range>(
+                [&store] { static_cast<void>(store.get(missing)); },
+                "reading an unknown document should fail");
+        snowseek::test::require_throws<std::out_of_range>(
+                [&store] { store.set_token_count(missing, 3); },
+                "updating an unknown document should fail");
+}
+
+} // namespace
+
+int main() {
+        return snowseek::test::run({
+                {"assigns contiguous document ids",
+                 assigns_contiguous_document_ids},
+                {"stores and updates document metadata",
+                 stores_and_updates_document_metadata},
+                {"rejects unknown document ids", rejects_unknown_document_ids},
+        });
+}

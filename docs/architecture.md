@@ -19,3 +19,7 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 `analysis::TokenizerSession` 接受连续文本块并保留跨块 Token 状态，输出从零开始且
 严格递增的 Token 位置。第一版仅索引 ASCII 字母、数字和下划线，非 ASCII 字符作为
 分隔符；单个 Token 默认限制为 256 字节。
+
+`document::DocumentStore` 按加入顺序分配连续 `DocumentId` 并保存内存文档表。
+`index::InMemoryIndex` 将规范化词项映射到 Posting List；每个 Posting 内的位置严格
+递增，同一词项的 DocumentId 也严格递增，为后续线性求交和磁盘编码提供不变量。
