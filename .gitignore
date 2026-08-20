@@ -4,5 +4,7 @@
 /compile_commands.json
 *.idx
 *.tmp
+/.vscode/
 
 CodeSeek-嵌入式Linux设计方向.md
+Testing/Temporary/
