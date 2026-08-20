@@ -1,0 +1,8 @@
+/build/
+/build-*/
+/.cache/
+/compile_commands.json
+*.idx
+*.tmp
+
+CodeSeek-嵌入式Linux设计方向.md

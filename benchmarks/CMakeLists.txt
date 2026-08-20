@@ -1,0 +1,4 @@
+add_executable(snowseek_tokenizer_benchmark tokenizer_benchmark.cpp)
+target_link_libraries(snowseek_tokenizer_benchmark PRIVATE SnowSeek::core)
+target_compile_features(snowseek_tokenizer_benchmark PRIVATE cxx_std_20)
+

@@ -1,0 +1,26 @@
+# SnowSeek
+
+SnowSeek 是一个面向嵌入式 Linux 的零第三方运行依赖本地全文检索引擎，使用
+C++20 实现。项目目前处于框架搭建阶段。
+
+## 构建
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+(cd build && ctest --output-on-failure)
+./build/snowseek --help
+```
+
+## 目录
+
+- `include/snowseek/`：公开接口，按领域模块划分；
+- `src/`：核心实现与 CLI；
+- `tests/`：无第三方测试框架的单元和集成测试；
+- `benchmarks/`：可选性能基准；
+- `cmake/toolchains/`：嵌入式 Linux 交叉编译模板；
+- `docs/`：架构、格式和开发规划文档；
+- `tools/`：索引检查、数据集生成等辅助工具；
+- `testdata/`：小型、可版本控制的测试语料。
+
+详细实施顺序见 [docs/ROADMAP.md](docs/ROADMAP.md)。
