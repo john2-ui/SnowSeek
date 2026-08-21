@@ -8,14 +8,14 @@ namespace snowseek::document {
 
 DocumentId DocumentStore::add(std::filesystem::path path,
                               std::uint64_t file_size,
-                              std::uint64_t modified_time) {
+                              std::int64_t modified_time_ns) {
         if (documents_.size() > std::numeric_limits<DocumentId>::max()) {
                 throw std::overflow_error("document id exceeds uint32_t");
         }
 
         const auto id = static_cast<DocumentId>(documents_.size());
-        documents_.push_back(
-                DocumentMeta{id, std::move(path), file_size, modified_time, 0});
+        documents_.push_back(DocumentMeta{id, std::move(path), file_size,
+                                          modified_time_ns, 0});
         return id;
 }
 

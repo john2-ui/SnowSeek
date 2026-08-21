@@ -21,6 +21,7 @@ add_library(snowseek_core
     src/document/text_reader.cpp
     src/filesystem/scanner.cpp
     src/index/in_memory_index.cpp
+    src/index/in_memory_index_builder.cpp
     src/index/index_builder.cpp
     src/query/query_engine.cpp
     src/ranking/bm25.cpp

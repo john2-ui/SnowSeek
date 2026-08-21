@@ -16,3 +16,5 @@ add_snowseek_test(text_reader unit/text_reader_test.cpp)
 add_snowseek_test(text_pipeline integration/text_pipeline_test.cpp)
 add_snowseek_test(document_store unit/document_store_test.cpp)
 add_snowseek_test(in_memory_index unit/in_memory_index_test.cpp)
+add_snowseek_test(in_memory_index_builder
+    integration/in_memory_index_builder_test.cpp)

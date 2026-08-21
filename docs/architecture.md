@@ -23,3 +23,8 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 `document::DocumentStore` 按加入顺序分配连续 `DocumentId` 并保存内存文档表。
 `index::InMemoryIndex` 将规范化词项映射到 Posting List；每个 Posting 内的位置严格
 递增，同一词项的 DocumentId 也严格递增，为后续线性求交和磁盘编码提供不变量。
+
+`index::InMemoryIndexBuilder` 连接 Scanner、TextReader、TokenizerSession、文档表与
+内存倒排索引。每个文件先完整解析到临时 Token 集合，成功后才分配 DocumentId 并
+提交 Posting，避免读取或分析失败留下半个文档。文档修改时间统一记录为 Unix Epoch
+纳秒。

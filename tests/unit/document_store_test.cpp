@@ -35,8 +35,8 @@ void stores_and_updates_document_metadata() {
                                       "stored metadata should retain its path");
         snowseek::test::require_equal(document.file_size, std::uint64_t{42},
                                       "file size should be retained");
-        snowseek::test::require_equal(document.modified_time,
-                                      std::uint64_t{1234},
+        snowseek::test::require_equal(document.modified_time_ns,
+                                      std::int64_t{1234},
                                       "modified time should be retained");
         snowseek::test::require_equal(document.token_count, std::uint32_t{7},
                                       "token count should be updateable");

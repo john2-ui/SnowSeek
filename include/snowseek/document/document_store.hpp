@@ -13,7 +13,7 @@ class DocumentStore {
       public:
         [[nodiscard]] DocumentId add(std::filesystem::path path,
                                      std::uint64_t file_size,
-                                     std::uint64_t modified_time);
+                                     std::int64_t modified_time_ns);
 
         void set_token_count(DocumentId id, std::uint32_t token_count);
 
