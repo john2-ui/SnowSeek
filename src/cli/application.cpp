@@ -8,6 +8,7 @@
 namespace snowseek::cli {
 namespace {
 
+/** @brief Prints command-line usage and the current program version. */
 void print_help() {
         std::cout << "SnowSeek " << kVersion << "\n\n"
                   << "Usage:\n"

@@ -4,6 +4,10 @@
 #include <iostream>
 #include <string>
 
+/**
+ * @brief Measures one-shot tokenization of approximately one MiB of text.
+ * @return Zero after printing bytes, tokens, and elapsed microseconds.
+ */
 int main() {
         constexpr std::size_t target_size = 1024U * 1024U;
         std::string input;

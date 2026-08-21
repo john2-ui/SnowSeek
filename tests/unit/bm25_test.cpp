@@ -4,12 +4,14 @@
 
 namespace {
 
+/** @brief Verifies that valid corpus statistics produce a positive score. */
 void scores_valid_term() {
         const double score = snowseek::ranking::bm25(2, 3, 100, 10, 80.0);
         snowseek::test::require(score > 0.0,
                                 "a present term should have a positive score");
 }
 
+/** @brief Verifies that incomplete statistics produce a zero score. */
 void rejects_incomplete_statistics() {
         snowseek::test::require_equal(
                 snowseek::ranking::bm25(0, 3, 100, 10, 80.0), 0.0,
@@ -25,6 +27,7 @@ void rejects_incomplete_statistics() {
                 "zero average document length should score zero");
 }
 
+/** @brief Verifies that additional term occurrences increase the score. */
 void rewards_higher_term_frequency() {
         const double low = snowseek::ranking::bm25(1, 3, 100, 10, 80.0);
         const double high = snowseek::ranking::bm25(4, 3, 100, 10, 80.0);
@@ -34,6 +37,7 @@ void rewards_higher_term_frequency() {
 
 } // namespace
 
+/** @brief Runs the BM25 unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"scores a valid term", scores_valid_term},

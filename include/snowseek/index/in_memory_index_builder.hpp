@@ -42,8 +42,26 @@ struct InMemoryBuildResult {
 
 class InMemoryIndexBuilder {
       public:
+        /**
+         * @brief Creates a builder and validates its reader and tokenizer
+         * configuration.
+         * @param options Options controlling file discovery, text reading, and
+         * tokenization.
+         * @throws std::invalid_argument If a reader or tokenizer option is
+         * invalid.
+         */
         explicit InMemoryIndexBuilder(InMemoryBuildOptions options = {});
 
+        /**
+         * @brief Builds a document table and positional inverted index from a
+         * source tree.
+         * @param source Root directory scanned for candidate documents.
+         * @return The successfully indexed documents, postings, diagnostics,
+         * and aggregate statistics. Individual scan and document failures are
+         * reported in the result and do not stop later candidates.
+         * @throws std::overflow_error If an aggregate statistic or index
+         * identifier exceeds its supported range.
+         */
         [[nodiscard]] InMemoryBuildResult
         build(const std::filesystem::path &source) const;
 

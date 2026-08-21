@@ -27,9 +27,17 @@ struct TextReadStats {
 
 class InvalidUtf8Error final : public std::runtime_error {
       public:
+        /**
+         * @brief Creates an error identifying invalid UTF-8 in a source file.
+         * @param path Source file containing the invalid sequence.
+         * @param byte_offset Zero-based source byte offset of the sequence.
+         */
         InvalidUtf8Error(std::filesystem::path path, std::uint64_t byte_offset);
 
+        /** @brief Returns the source path associated with the error. */
         [[nodiscard]] const std::filesystem::path &path() const noexcept;
+
+        /** @brief Returns the zero-based source byte offset of the error. */
         [[nodiscard]] std::uint64_t byte_offset() const noexcept;
 
       private:
@@ -42,8 +50,24 @@ using TextChunkConsumer = std::function<void(std::string_view)>;
 
 class TextReader {
       public:
+        /**
+         * @brief Creates a streaming UTF-8 text reader.
+         * @param options Chunk size and invalid-sequence policy.
+         * @throws std::invalid_argument If the chunk size cannot be used by the
+         * underlying stream API.
+         */
         explicit TextReader(TextReadOptions options = {});
 
+        /**
+         * @brief Reads a file and emits chunks ending on UTF-8 boundaries.
+         * @param path Text file to read in binary mode.
+         * @param consumer Callback invoked with each nonempty output chunk; its
+         * string_view is valid only for the duration of the callback.
+         * @return Source, output, and invalid-sequence byte statistics.
+         * @throws std::invalid_argument If consumer is empty.
+         * @throws std::runtime_error If the file cannot be opened or read.
+         * @throws InvalidUtf8Error If strict mode encounters invalid UTF-8.
+         */
         [[nodiscard]] TextReadStats
         read(const std::filesystem::path &path,
              const TextChunkConsumer &consumer) const;

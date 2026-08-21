@@ -7,12 +7,22 @@
 namespace snowseek::analysis {
 namespace {
 
+/**
+ * @brief Tests whether a byte may participate in an ASCII token.
+ * @param character Byte to classify.
+ * @return True for ASCII letters, digits, and underscore.
+ */
 [[nodiscard]] bool is_ascii_token_character(unsigned char character) {
         return (character >= 'a' && character <= 'z') ||
                (character >= 'A' && character <= 'Z') ||
                (character >= '0' && character <= '9') || character == '_';
 }
 
+/**
+ * @brief Lowercases an ASCII letter while preserving other token bytes.
+ * @param character Token byte to normalize.
+ * @return The normalized byte as a char.
+ */
 [[nodiscard]] char normalize_ascii(unsigned char character) {
         if (character >= 'A' && character <= 'Z') {
                 return static_cast<char>(character + ('a' - 'A'));
@@ -20,6 +30,11 @@ namespace {
         return static_cast<char>(character);
 }
 
+/**
+ * @brief Verifies that a token callback can be invoked.
+ * @param consumer Callback to validate.
+ * @throws std::invalid_argument If consumer is empty.
+ */
 void require_consumer(const TokenConsumer &consumer) {
         if (!consumer) {
                 throw std::invalid_argument("token consumer must not be empty");

@@ -15,6 +15,7 @@ namespace {
 
 class TemporaryDirectory {
       public:
+        /** @brief Creates a unique temporary directory for one test scope. */
         TemporaryDirectory() {
                 const auto seed = std::chrono::steady_clock::now()
                                           .time_since_epoch()
@@ -36,11 +37,13 @@ class TemporaryDirectory {
         TemporaryDirectory(const TemporaryDirectory &) = delete;
         TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
 
+        /** @brief Removes the temporary directory and its contents. */
         ~TemporaryDirectory() {
                 std::error_code error;
                 std::filesystem::remove_all(path_, error);
         }
 
+        /** @brief Returns the temporary directory path. */
         [[nodiscard]] const std::filesystem::path &path() const {
                 return path_;
         }
@@ -49,6 +52,12 @@ class TemporaryDirectory {
         std::filesystem::path path_;
 };
 
+/**
+ * @brief Writes binary fixture contents to a path.
+ * @param path Destination fixture path.
+ * @param contents Bytes to write.
+ * @throws std::runtime_error If the fixture cannot be written.
+ */
 void write_file(const std::filesystem::path &path, std::string_view contents) {
         std::ofstream output(path, std::ios::binary);
         output.write(contents.data(),
@@ -58,6 +67,14 @@ void write_file(const std::filesystem::path &path, std::string_view contents) {
         }
 }
 
+/**
+ * @brief Collects all chunks emitted by a text reader.
+ * @param reader Reader configuration under test.
+ * @param path Fixture file to read.
+ * @param stats Output receiving read statistics.
+ * @param consumer_calls Output receiving the callback count.
+ * @return Concatenated emitted text.
+ */
 std::string read_all(const snowseek::document::TextReader &reader,
                      const std::filesystem::path &path,
                      snowseek::document::TextReadStats &stats,
@@ -71,6 +88,7 @@ std::string read_all(const snowseek::document::TextReader &reader,
         return output;
 }
 
+/** @brief Verifies rejection of an unusable reader chunk size. */
 void rejects_invalid_configuration() {
         snowseek::document::TextReadOptions options;
         options.chunk_size = 0;
@@ -82,6 +100,7 @@ void rejects_invalid_configuration() {
                 "a zero-sized chunk should be rejected");
 }
 
+/** @brief Verifies bounded streaming of valid ASCII content. */
 void reads_ascii_in_bounded_chunks() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "ascii.txt";
@@ -108,6 +127,7 @@ void reads_ascii_in_bounded_chunks() {
                 "the consumer should receive multiple bounded chunks");
 }
 
+/** @brief Verifies preservation of UTF-8 sequences split across chunks. */
 void preserves_utf8_across_chunk_boundaries() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "utf8.txt";
@@ -131,6 +151,7 @@ void preserves_utf8_across_chunk_boundaries() {
                 "split valid UTF-8 should not be reported as invalid");
 }
 
+/** @brief Verifies replacement and accounting of invalid UTF-8. */
 void replaces_invalid_utf8() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "invalid.txt";
@@ -163,6 +184,7 @@ void replaces_invalid_utf8() {
                                       "stats should count replacement bytes");
 }
 
+/** @brief Verifies strict rejection with the original byte offset. */
 void rejects_invalid_utf8_with_offset() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "strict.txt";
@@ -191,6 +213,7 @@ void rejects_invalid_utf8_with_offset() {
         throw std::runtime_error("strict mode should reject invalid UTF-8");
 }
 
+/** @brief Verifies replacement of a truncated final UTF-8 sequence. */
 void replaces_truncated_sequence_at_end_of_file() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "truncated.txt";
@@ -215,6 +238,7 @@ void replaces_truncated_sequence_at_end_of_file() {
                 "a truncated prefix should count as one invalid sequence");
 }
 
+/** @brief Verifies empty-file handling and missing-file diagnostics. */
 void handles_empty_and_missing_files() {
         const TemporaryDirectory temporary;
         const auto empty = temporary.path() / "empty.txt";
@@ -243,6 +267,7 @@ void handles_empty_and_missing_files() {
 
 } // namespace
 
+/** @brief Runs the streaming text-reader unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"rejects invalid configuration",

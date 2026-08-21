@@ -9,6 +9,7 @@
 
 namespace {
 
+/** @brief Verifies posting construction across documents and positions. */
 void builds_postings_for_multiple_documents() {
         snowseek::index::InMemoryIndex index;
         index.add_occurrence("timeout", 0, 1);
@@ -40,6 +41,7 @@ void builds_postings_for_multiple_documents() {
                 "positions may restart for a new document");
 }
 
+/** @brief Verifies enforcement of posting and position ordering. */
 void rejects_invalid_posting_order() {
         snowseek::index::InMemoryIndex index;
         index.add_occurrence("term", 1, 3);
@@ -66,6 +68,7 @@ void rejects_invalid_posting_order() {
                 "rejected occurrences should not change positions");
 }
 
+/** @brief Verifies that empty dictionary terms are rejected atomically. */
 void rejects_empty_terms() {
         snowseek::index::InMemoryIndex index;
         snowseek::test::require_throws<std::invalid_argument>(
@@ -76,6 +79,7 @@ void rejects_empty_terms() {
                 "an invalid term should not modify the dictionary");
 }
 
+/** @brief Verifies that missing lookups do not mutate the dictionary. */
 void missing_lookups_do_not_modify_the_dictionary() {
         snowseek::index::InMemoryIndex index;
         index.add_occurrence("known", 0, 0);
@@ -90,6 +94,7 @@ void missing_lookups_do_not_modify_the_dictionary() {
 
 } // namespace
 
+/** @brief Runs the in-memory-index unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"builds postings for multiple documents",

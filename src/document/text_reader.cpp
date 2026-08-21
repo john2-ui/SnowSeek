@@ -12,10 +12,20 @@ namespace {
 
 constexpr std::string_view kReplacementCharacter{"\xef\xbf\xbd", 3};
 
+/**
+ * @brief Tests whether a byte is a UTF-8 continuation byte.
+ * @param byte Byte to classify.
+ * @return True when byte is in the 0x80 through 0xBF range.
+ */
 [[nodiscard]] bool is_continuation(unsigned char byte) {
         return byte >= 0x80U && byte <= 0xbfU;
 }
 
+/**
+ * @brief Determines the expected UTF-8 sequence length from a leading byte.
+ * @param leading_byte Candidate leading byte.
+ * @return A length from one through four, or zero for an invalid leader.
+ */
 [[nodiscard]] std::size_t sequence_length(unsigned char leading_byte) {
         if (leading_byte <= 0x7fU) {
                 return 1;
@@ -32,6 +42,13 @@ constexpr std::string_view kReplacementCharacter{"\xef\xbf\xbd", 3};
         return 0;
 }
 
+/**
+ * @brief Validates the constrained second byte of a UTF-8 sequence.
+ * @param leading_byte Valid multibyte sequence leader.
+ * @param second_byte Candidate second byte.
+ * @return True when the pair cannot encode an overlong, surrogate, or
+ * out-of-range code point.
+ */
 [[nodiscard]] bool is_valid_second_byte(unsigned char leading_byte,
                                         unsigned char second_byte) {
         if (!is_continuation(second_byte)) {
@@ -52,6 +69,15 @@ constexpr std::string_view kReplacementCharacter{"\xef\xbf\xbd", 3};
         return true;
 }
 
+/**
+ * @brief Applies the configured policy to one invalid UTF-8 sequence.
+ * @param path Source file being decoded.
+ * @param policy Whether to replace or reject invalid input.
+ * @param byte_offset Original source offset of the invalid sequence.
+ * @param stats Statistics updated when replacement is selected.
+ * @param output Current output buffer receiving the replacement character.
+ * @throws InvalidUtf8Error If policy requests strict rejection.
+ */
 void handle_invalid_sequence(const std::filesystem::path &path,
                              InvalidUtf8Policy policy,
                              std::uint64_t byte_offset, TextReadStats &stats,
@@ -68,12 +94,27 @@ struct Utf8State {
         std::uint64_t pending_offset{};
 };
 
+/**
+ * @brief Validates one source chunk and emits complete UTF-8 sequences.
+ * @param path Source file used in diagnostics.
+ * @param policy Invalid-sequence handling policy.
+ * @param bytes Newly read source bytes.
+ * @param base_offset Source offset corresponding to bytes.front().
+ * @param final Whether no additional source bytes will arrive.
+ * @param stats Read statistics updated with emitted and invalid byte counts.
+ * @param state Cross-chunk state holding an incomplete final sequence.
+ * @param consumer Callback receiving validated nonempty output chunks.
+ * @throws InvalidUtf8Error If strict mode encounters invalid UTF-8.
+ */
 void emit_valid_utf8(const std::filesystem::path &path,
                      InvalidUtf8Policy policy, std::string_view bytes,
                      std::uint64_t base_offset, bool final,
                      TextReadStats &stats, Utf8State &state,
                      const TextChunkConsumer &consumer) {
         std::string input;
+
+        // Reattach a sequence split by the previous read before validating the
+        // new bytes against their original file offsets.
         if (!state.pending.empty()) {
                 input.reserve(state.pending.size() + bytes.size());
                 input.append(state.pending);
@@ -138,6 +179,8 @@ void emit_valid_utf8(const std::filesystem::path &path,
 
                 if (available < expected_length) {
                         if (!final) {
+                                // Preserve only a valid incomplete suffix; it
+                                // will be completed by the next reader chunk.
                                 state.pending.assign(input, index,
                                                      std::string::npos);
                                 state.pending_offset = base_offset + index;
@@ -154,12 +197,20 @@ void emit_valid_utf8(const std::filesystem::path &path,
                 index += expected_length;
         }
 
+        // Consumer views borrow output storage and therefore cannot escape this
+        // synchronous callback.
         if (!output.empty()) {
                 stats.bytes_emitted += output.size();
                 consumer(output);
         }
 }
 
+/**
+ * @brief Creates a consistent file-operation failure diagnostic.
+ * @param path File involved in the failed operation.
+ * @param action Operation name such as open or read.
+ * @return A runtime error containing the action and path.
+ */
 [[nodiscard]] std::runtime_error read_error(const std::filesystem::path &path,
                                             std::string_view action) {
         return std::runtime_error("failed to " + std::string(action) +

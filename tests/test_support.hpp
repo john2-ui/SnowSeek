@@ -17,12 +17,27 @@ struct TestCase {
         TestFunction function;
 };
 
+/**
+ * @brief Fails a test when a condition is false.
+ * @param condition Assertion result.
+ * @param message Diagnostic reported on failure.
+ * @throws std::runtime_error If condition is false.
+ */
 inline void require(bool condition, std::string_view message) {
         if (!condition) {
                 throw std::runtime_error(std::string(message));
         }
 }
 
+/**
+ * @brief Fails a test when two values do not compare equal.
+ * @tparam Actual Type of the observed value.
+ * @tparam Expected Type of the expected value.
+ * @param actual Observed value.
+ * @param expected Expected value.
+ * @param message Diagnostic reported on failure.
+ * @throws std::runtime_error If the values differ.
+ */
 template <typename Actual, typename Expected>
 void require_equal(const Actual &actual, const Expected &expected,
                    std::string_view message) {
@@ -31,6 +46,14 @@ void require_equal(const Actual &actual, const Expected &expected,
         }
 }
 
+/**
+ * @brief Verifies that a callable throws a requested exception type.
+ * @tparam Exception Expected exception type.
+ * @tparam Function Callable type.
+ * @param function Operation expected to throw.
+ * @param message Diagnostic reported on failure.
+ * @throws std::runtime_error If no exception or a different type is thrown.
+ */
 template <typename Exception, typename Function>
 void require_throws(Function &&function, std::string_view message) {
         try {
@@ -45,6 +68,11 @@ void require_throws(Function &&function, std::string_view message) {
                                  ": exception was not thrown");
 }
 
+/**
+ * @brief Runs test cases and reports pass or failure diagnostics.
+ * @param cases Named test functions to execute in order.
+ * @return Zero when every case passes, otherwise one.
+ */
 inline int run(std::initializer_list<TestCase> cases) {
         int failures = 0;
         for (const auto &test_case : cases) {

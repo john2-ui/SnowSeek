@@ -7,12 +7,23 @@
 namespace snowseek::storage {
 namespace {
 
+/**
+ * @brief Writes one unsigned 32-bit integer in little-endian order.
+ * @param output Destination stream.
+ * @param value Value to encode.
+ */
 void write_u32_le(std::ostream &output, std::uint32_t value) {
         for (unsigned int shift = 0; shift < 32; shift += 8) {
                 output.put(static_cast<char>((value >> shift) & 0xffU));
         }
 }
 
+/**
+ * @brief Reads one little-endian unsigned 32-bit integer.
+ * @param input Source stream.
+ * @return Decoded integer.
+ * @throws std::runtime_error If fewer than four bytes are available.
+ */
 std::uint32_t read_u32_le(std::istream &input) {
         std::uint32_t value = 0;
         for (unsigned int shift = 0; shift < 32; shift += 8) {

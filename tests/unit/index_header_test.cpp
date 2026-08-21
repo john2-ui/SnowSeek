@@ -8,6 +8,7 @@
 
 namespace {
 
+/** @brief Verifies index-header serialization round trips. */
 void round_trips_header() {
         std::stringstream stream(std::ios::in | std::ios::out |
                                  std::ios::binary);
@@ -22,6 +23,7 @@ void round_trips_header() {
                                       "index feature flags should round-trip");
 }
 
+/** @brief Verifies rejection of a header with invalid magic bytes. */
 void rejects_invalid_magic() {
         std::stringstream stream("NOT-AN-INDEX",
                                  std::ios::in | std::ios::binary);
@@ -33,6 +35,7 @@ void rejects_invalid_magic() {
                 "invalid index magic should be rejected");
 }
 
+/** @brief Verifies rejection of an incomplete serialized header. */
 void rejects_truncated_header() {
         std::string bytes(snowseek::storage::kIndexMagic.begin(),
                           snowseek::storage::kIndexMagic.end());
@@ -48,6 +51,7 @@ void rejects_truncated_header() {
 
 } // namespace
 
+/** @brief Runs the index-header unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"round-trips the index header", round_trips_header},

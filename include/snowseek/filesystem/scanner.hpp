@@ -27,8 +27,17 @@ struct ScanResult {
 
 class Scanner {
       public:
+        /**
+         * @brief Creates a recursive scanner with filtering and link options.
+         * @param options File size, pattern, and symbolic-link rules.
+         */
         explicit Scanner(ScanOptions options = {});
 
+        /**
+         * @brief Recursively discovers eligible regular files below a root.
+         * @param root Directory from which traversal begins.
+         * @return Stably sorted files plus recoverable traversal errors.
+         */
         [[nodiscard]] ScanResult scan(const std::filesystem::path &root) const;
 
       private:

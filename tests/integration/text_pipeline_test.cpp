@@ -18,6 +18,7 @@ namespace {
 
 class TemporaryDirectory {
       public:
+        /** @brief Creates a unique temporary directory for one test scope. */
         TemporaryDirectory() {
                 const auto seed = std::chrono::steady_clock::now()
                                           .time_since_epoch()
@@ -39,11 +40,13 @@ class TemporaryDirectory {
         TemporaryDirectory(const TemporaryDirectory &) = delete;
         TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
 
+        /** @brief Removes the temporary directory and its contents. */
         ~TemporaryDirectory() {
                 std::error_code error;
                 std::filesystem::remove_all(path_, error);
         }
 
+        /** @brief Returns the temporary directory path. */
         [[nodiscard]] const std::filesystem::path &path() const {
                 return path_;
         }
@@ -52,6 +55,7 @@ class TemporaryDirectory {
         std::filesystem::path path_;
 };
 
+/** @brief Verifies equivalence between streamed and one-shot tokenization. */
 void produces_the_same_tokens_for_streamed_input() {
         const TemporaryDirectory temporary;
         const auto path = temporary.path() / "input.txt";
@@ -100,6 +104,7 @@ void produces_the_same_tokens_for_streamed_input() {
 
 } // namespace
 
+/** @brief Runs the reader-to-tokenizer integration test. */
 int main() {
         return snowseek::test::run({
                 {"matches one-shot tokenization for byte-sized chunks",

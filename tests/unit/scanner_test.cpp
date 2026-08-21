@@ -16,6 +16,7 @@ namespace {
 
 class TemporaryDirectory {
       public:
+        /** @brief Creates a unique temporary directory for one test scope. */
         TemporaryDirectory() {
                 const auto seed = std::chrono::steady_clock::now()
                                           .time_since_epoch()
@@ -37,11 +38,13 @@ class TemporaryDirectory {
         TemporaryDirectory(const TemporaryDirectory &) = delete;
         TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
 
+        /** @brief Removes the temporary directory and its contents. */
         ~TemporaryDirectory() {
                 std::error_code error;
                 std::filesystem::remove_all(path_, error);
         }
 
+        /** @brief Returns the temporary directory path. */
         [[nodiscard]] const std::filesystem::path &path() const {
                 return path_;
         }
@@ -50,6 +53,12 @@ class TemporaryDirectory {
         std::filesystem::path path_;
 };
 
+/**
+ * @brief Writes binary fixture contents to a path.
+ * @param path Destination fixture path.
+ * @param contents Bytes to write.
+ * @throws std::runtime_error If the fixture cannot be written.
+ */
 void write_file(const std::filesystem::path &path, std::string_view contents) {
         std::ofstream output(path, std::ios::binary);
         output << contents;
@@ -68,6 +77,7 @@ bool contains(const std::vector<std::filesystem::path> &paths,
         return false;
 }
 
+/** @brief Verifies recursive discovery of regular files. */
 void finds_regular_files_recursively() {
         const TemporaryDirectory temporary;
         const auto nested = temporary.path() / "nested";
@@ -89,6 +99,7 @@ void finds_regular_files_recursively() {
                                 "scanner should include the nested file");
 }
 
+/** @brief Verifies filtering by the maximum file size. */
 void enforces_file_size_limit() {
         const TemporaryDirectory temporary;
         const auto small = temporary.path() / "small.txt";
@@ -108,6 +119,7 @@ void enforces_file_size_limit() {
                                 "a file at the size limit should be included");
 }
 
+/** @brief Verifies diagnostics for a missing scan root. */
 void reports_missing_root() {
         const TemporaryDirectory temporary;
         const auto missing = temporary.path() / "missing";
@@ -127,6 +139,7 @@ void reports_missing_root() {
                 "the error should report a missing path");
 }
 
+/** @brief Verifies include and exclude pattern composition. */
 void applies_include_and_exclude_patterns() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "src";
@@ -166,6 +179,7 @@ void applies_include_and_exclude_patterns() {
                 "files outside include patterns should not be included");
 }
 
+/** @brief Verifies deterministic path ordering in scan results. */
 void returns_files_in_stable_order() {
         const TemporaryDirectory temporary;
         const auto last = temporary.path() / "z-last.txt";
@@ -186,6 +200,7 @@ void returns_files_in_stable_order() {
                 "scanner output should use stable path ordering");
 }
 
+/** @brief Verifies optional traversal of file symbolic links. */
 void respects_file_symlink_option() {
         const TemporaryDirectory temporary;
         const auto target = temporary.path() / "target.txt";
@@ -216,6 +231,7 @@ void respects_file_symlink_option() {
                                 "the followed symlink should be returned");
 }
 
+/** @brief Verifies cycle prevention when directory links are followed. */
 void prevents_directory_symlink_cycles() {
         const TemporaryDirectory temporary;
         const auto nested = temporary.path() / "nested";
@@ -246,6 +262,7 @@ void prevents_directory_symlink_cycles() {
 
 } // namespace
 
+/** @brief Runs the filesystem-scanner unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"finds regular files recursively",

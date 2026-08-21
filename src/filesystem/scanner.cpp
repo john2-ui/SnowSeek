@@ -10,6 +10,12 @@
 namespace snowseek::filesystem {
 
 namespace {
+/**
+ * @brief Matches a scan pattern against a relative path or its filename.
+ * @param pattern Shell-style pattern; patterns containing slash match paths.
+ * @param relative_path Candidate path relative to the scan root.
+ * @return True when fnmatch accepts the selected candidate string.
+ */
 bool matches_pattern(std::string_view pattern,
                      const std::filesystem::path &relative_path) {
         const bool matches_relative_path =
@@ -25,6 +31,12 @@ bool matches_pattern(std::string_view pattern,
         return ::fnmatch(owned_pattern.c_str(), candidate.c_str(), 0) == 0;
 }
 
+/**
+ * @brief Tests a path against any pattern in a collection.
+ * @param patterns Patterns evaluated in order.
+ * @param relative_path Candidate path relative to the scan root.
+ * @return True when at least one pattern matches.
+ */
 bool matches_any(const std::vector<std::string> &patterns,
                  const std::filesystem::path &relative_path) {
         return std::any_of(patterns.begin(), patterns.end(),
@@ -34,6 +46,12 @@ bool matches_any(const std::vector<std::string> &patterns,
                            });
 }
 
+/**
+ * @brief Applies include-then-exclude rules to a candidate file.
+ * @param options Scan options containing both pattern sets.
+ * @param relative_path Candidate path relative to the scan root.
+ * @return True when the file is admitted by all configured filters.
+ */
 bool should_include(const ScanOptions &options,
                     const std::filesystem::path &relative_path) {
         if (!options.include_patterns.empty() &&
@@ -47,11 +65,21 @@ bool should_include(const ScanOptions &options,
         return true;
 }
 
+/**
+ * @brief Appends a path-specific filesystem error to a scan result.
+ * @param result Result receiving the diagnostic.
+ * @param path Path associated with the error.
+ * @param error Filesystem error code to preserve.
+ */
 void append_error(ScanResult &result, const std::filesystem::path &path,
                   const std::error_code &error) {
         result.errors.push_back(ScanError{path, error});
 }
 
+/**
+ * @brief Stabilizes file and error ordering for deterministic consumers.
+ * @param result Scan result sorted in place.
+ */
 void sort_result(ScanResult &result) {
         std::sort(result.files.begin(), result.files.end());
         std::sort(result.errors.begin(), result.errors.end(),
@@ -70,6 +98,8 @@ Scanner::Scanner(ScanOptions options) : options_(std::move(options)) {}
 ScanResult Scanner::scan(const std::filesystem::path &root) const {
         ScanResult result;
 
+        // Validate the root separately so top-level failures have one precise
+        // diagnostic and never enter recursive traversal.
         std::error_code error;
         const auto root_status = std::filesystem::status(root, error);
 
@@ -93,6 +123,8 @@ ScanResult Scanner::scan(const std::filesystem::path &root) const {
 
         std::set<std::filesystem::path> visited_directories;
         if (options_.follow_symlinks) {
+                // Canonical identities prevent followed directory links from
+                // re-entering an already visited subtree.
                 const auto canonical_root =
                         std::filesystem::canonical(root, error);
                 if (error) {
@@ -120,6 +152,8 @@ ScanResult Scanner::scan(const std::filesystem::path &root) const {
         while (iterator != end) {
                 const auto path = iterator->path();
 
+                // Inspect each entry without throwing so one inaccessible path
+                // does not abort the rest of the scan.
                 std::error_code entry_error;
                 const bool is_symlink = iterator->is_symlink(entry_error);
                 if (entry_error) {

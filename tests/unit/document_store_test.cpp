@@ -8,6 +8,7 @@
 
 namespace {
 
+/** @brief Verifies contiguous document identifiers and store size. */
 void assigns_contiguous_document_ids() {
         snowseek::document::DocumentStore store;
         const auto first = store.add("first.txt", 10, 100);
@@ -22,6 +23,7 @@ void assigns_contiguous_document_ids() {
                                       "the store should track its size");
 }
 
+/** @brief Verifies storage and mutation of document metadata. */
 void stores_and_updates_document_metadata() {
         snowseek::document::DocumentStore store;
         const auto id = store.add("source/main.cpp", 42, 1234);
@@ -42,6 +44,7 @@ void stores_and_updates_document_metadata() {
                                       "token count should be updateable");
 }
 
+/** @brief Verifies that unknown document identifiers are rejected. */
 void rejects_unknown_document_ids() {
         snowseek::document::DocumentStore store;
         static_cast<void>(store.add("only.txt", 1, 2));
@@ -57,6 +60,7 @@ void rejects_unknown_document_ids() {
 
 } // namespace
 
+/** @brief Runs the document-store unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"assigns contiguous document ids",

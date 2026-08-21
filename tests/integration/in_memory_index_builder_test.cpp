@@ -16,6 +16,7 @@ namespace {
 
 class TemporaryDirectory {
       public:
+        /** @brief Creates a unique temporary directory for one test scope. */
         TemporaryDirectory() {
                 const auto seed = std::chrono::steady_clock::now()
                                           .time_since_epoch()
@@ -37,11 +38,13 @@ class TemporaryDirectory {
         TemporaryDirectory(const TemporaryDirectory &) = delete;
         TemporaryDirectory &operator=(const TemporaryDirectory &) = delete;
 
+        /** @brief Removes the temporary directory and its contents. */
         ~TemporaryDirectory() {
                 std::error_code error;
                 std::filesystem::remove_all(path_, error);
         }
 
+        /** @brief Returns the temporary directory path. */
         [[nodiscard]] const std::filesystem::path &path() const {
                 return path_;
         }
@@ -50,6 +53,12 @@ class TemporaryDirectory {
         std::filesystem::path path_;
 };
 
+/**
+ * @brief Writes binary fixture contents to a path.
+ * @param path Destination fixture path.
+ * @param contents Bytes to write.
+ * @throws std::runtime_error If the fixture cannot be written.
+ */
 void write_file(const std::filesystem::path &path, std::string_view contents) {
         std::ofstream output(path, std::ios::binary);
         output.write(contents.data(),
@@ -59,6 +68,7 @@ void write_file(const std::filesystem::path &path, std::string_view contents) {
         }
 }
 
+/** @brief Verifies end-to-end document and posting construction. */
 void builds_documents_and_postings_from_a_directory() {
         const TemporaryDirectory temporary;
         const auto first = temporary.path() / "a.txt";
@@ -145,6 +155,7 @@ void builds_documents_and_postings_from_a_directory() {
                                       "stats should count source bytes");
 }
 
+/** @brief Verifies propagation of scanner include and exclude filters. */
 void applies_scan_filters() {
         const TemporaryDirectory temporary;
         write_file(temporary.path() / "keep.txt", "kept");
@@ -168,6 +179,7 @@ void applies_scan_filters() {
                                 "a non-included extension should be skipped");
 }
 
+/** @brief Verifies default replacement of invalid UTF-8 during indexing. */
 void replaces_invalid_utf8_by_default() {
         const TemporaryDirectory temporary;
         std::string contents{"left "};
@@ -191,6 +203,7 @@ void replaces_invalid_utf8_by_default() {
                 "replacement bytes should act as delimiters");
 }
 
+/** @brief Verifies atomic rejection and continuation after file failures. */
 void does_not_commit_failed_documents() {
         const TemporaryDirectory temporary;
         write_file(temporary.path() / "a-valid.txt", "safe");
@@ -242,6 +255,7 @@ void does_not_commit_failed_documents() {
                                       "failed files should be counted");
 }
 
+/** @brief Verifies scan diagnostics for a missing corpus root. */
 void returns_scan_errors_for_a_missing_root() {
         const TemporaryDirectory temporary;
         const auto missing = temporary.path() / "missing";
@@ -261,6 +275,7 @@ void returns_scan_errors_for_a_missing_root() {
 
 } // namespace
 
+/** @brief Runs the in-memory-index-builder integration-test suite. */
 int main() {
         return snowseek::test::run({
                 {"builds documents and postings from a directory",

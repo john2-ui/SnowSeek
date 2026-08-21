@@ -11,6 +11,7 @@
 
 namespace {
 
+/** @brief Verifies ASCII tokenization and lowercase normalization. */
 void tokenizes_ascii_words_and_identifiers() {
         const snowseek::analysis::Tokenizer tokenizer;
         const std::vector<std::string> expected{"timeout", "retry_policy",
@@ -20,6 +21,7 @@ void tokenizes_ascii_words_and_identifiers() {
                 "ASCII words should be normalized and tokenized");
 }
 
+/** @brief Verifies that empty and delimiter-only inputs emit no tokens. */
 void ignores_delimiters_and_empty_input() {
         const snowseek::analysis::Tokenizer tokenizer;
         snowseek::test::require(tokenizer.tokenize("").empty(),
@@ -29,6 +31,7 @@ void ignores_delimiters_and_empty_input() {
                 "delimiter-only input should produce no tokens");
 }
 
+/** @brief Verifies emission of tokens adjacent to input boundaries. */
 void handles_tokens_at_input_boundaries() {
         const snowseek::analysis::Tokenizer tokenizer;
         const std::vector<std::string> expected{"first", "last"};
@@ -37,6 +40,7 @@ void handles_tokens_at_input_boundaries() {
                                       "boundary tokens should not be dropped");
 }
 
+/** @brief Verifies zero-based, strictly increasing token positions. */
 void assigns_strictly_increasing_positions() {
         const snowseek::analysis::Tokenizer tokenizer;
         const auto tokens =
@@ -54,6 +58,7 @@ void assigns_strictly_increasing_positions() {
                                       "the third position should increase");
 }
 
+/** @brief Verifies preservation of token state across streamed chunks. */
 void preserves_tokens_across_chunks() {
         snowseek::analysis::TokenizerSession session;
         std::vector<snowseek::analysis::Token> tokens;
@@ -80,6 +85,7 @@ void preserves_tokens_across_chunks() {
                 "finish should emit the final unterminated token");
 }
 
+/** @brief Verifies identifier handling and non-ASCII delimiters. */
 void handles_identifier_and_non_ascii_boundaries() {
         const snowseek::analysis::Tokenizer tokenizer;
         const std::string input = "camelCase snake_case HTTP2 \xe4\xb8\xad end";
@@ -91,6 +97,7 @@ void handles_identifier_and_non_ascii_boundaries() {
                                       "and UTF-8 should delimit");
 }
 
+/** @brief Verifies acceptance and rejection at the token-length limit. */
 void enforces_maximum_token_length() {
         snowseek::analysis::TokenizerOptions options;
         options.max_token_length = 4;
@@ -106,6 +113,7 @@ void enforces_maximum_token_length() {
                 "an oversized token should be rejected");
 }
 
+/** @brief Verifies tokenizer configuration and session lifecycle checks. */
 void validates_session_lifecycle() {
         snowseek::analysis::TokenizerOptions options;
         options.max_token_length = 0;
@@ -128,6 +136,7 @@ void validates_session_lifecycle() {
 
 } // namespace
 
+/** @brief Runs the tokenizer unit-test suite. */
 int main() {
         return snowseek::test::run({
                 {"tokenizes ASCII words and identifiers",
