@@ -28,3 +28,8 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 内存倒排索引。每个文件先完整解析到临时 Token 集合，成功后才分配 DocumentId 并
 提交 Posting，避免读取或分析失败留下半个文档。文档修改时间统一记录为 Unix Epoch
 纳秒。
+
+`query::InMemoryQueryEngine` 以只读引用绑定文档表和内存索引，用与建索引
+一致的 Tokenizer 规范化单词查询。两词 AND 查询使用双指针线性求交，结果
+仅按 DocumentId 升序返回。该内存查询层不依赖面向磁盘索引的 `QueryEngine`，
+当前不包含相关性排序、Top-K 或查询表达式解析。
