@@ -15,6 +15,15 @@ cmake --build build
 测试不依赖第三方框架，并且在 Debug 和 Release 构建中都会执行显式检查。若需要将
 编译器警告视为错误，可在配置时增加 `-DSNOWSEEK_WARNINGS_AS_ERRORS=ON`。
 
+一键执行 GCC/Clang 的 Debug/Release 编译与测试矩阵：
+
+```bash
+./tools/test-matrix.sh
+```
+
+可通过 `SNOWSEEK_BUILD_JOBS` 调整并行任务数，通过 `SNOWSEEK_BUILD_ROOT`
+指定构建产物目录。
+
 ## 目录
 
 - `include/snowseek/`：公开接口，按领域模块划分；
