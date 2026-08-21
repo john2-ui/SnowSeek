@@ -1,4 +1,4 @@
-#include "snowseek/index/in_memory_index_builder.hpp"
+#include "snowseek/index/index_builder.hpp"
 
 #include "test_support.hpp"
 

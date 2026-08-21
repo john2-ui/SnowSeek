@@ -1,4 +1,4 @@
-#include "snowseek/index/in_memory_index.hpp"
+#include "snowseek/index/index.hpp"
 
 #include <limits>
 #include <stdexcept>
