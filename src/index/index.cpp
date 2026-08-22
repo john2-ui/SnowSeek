@@ -1,5 +1,6 @@
 #include "snowseek/index/index.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -60,6 +61,17 @@ const PostingList *InMemoryIndex::find(std::string_view term) const {
 
 std::size_t InMemoryIndex::term_count() const noexcept {
         return dictionary_.size();
+}
+
+std::vector<std::string> InMemoryIndex::sorted_terms() const {
+        std::vector<std::string> terms;
+        terms.reserve(dictionary_.size());
+        for (const auto &[term, postings] : dictionary_) {
+                static_cast<void>(postings);
+                terms.push_back(term);
+        }
+        std::sort(terms.begin(), terms.end());
+        return terms;
 }
 
 } // namespace snowseek::index

@@ -35,4 +35,8 @@ const DocumentMeta &DocumentStore::get(DocumentId id) const {
 
 std::size_t DocumentStore::size() const noexcept { return documents_.size(); }
 
+const std::vector<DocumentMeta> &DocumentStore::all() const noexcept {
+        return documents_;
+}
+
 } // namespace snowseek::document

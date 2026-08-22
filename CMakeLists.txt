@@ -25,7 +25,10 @@ add_library(snowseek_core
     src/query/posting_operations.cpp
     src/query/query_engine.cpp
     src/ranking/bm25.cpp
+    src/storage/binary_codec.cpp
+    src/storage/checksum.cpp
     src/storage/index_header.cpp
+    src/storage/index_file.cpp
 )
 add_library(SnowSeek::core ALIAS snowseek_core)
 

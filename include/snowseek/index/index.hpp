@@ -55,6 +55,12 @@ class InMemoryIndex {
         /** @brief Returns the number of distinct indexed terms. */
         [[nodiscard]] std::size_t term_count() const noexcept;
 
+        /**
+         * @brief Returns all dictionary terms in deterministic byte order.
+         * @return A sorted copy of the normalized term strings.
+         */
+        [[nodiscard]] std::vector<std::string> sorted_terms() const;
+
       private:
         std::unordered_map<std::string, PostingList> dictionary_;
 };

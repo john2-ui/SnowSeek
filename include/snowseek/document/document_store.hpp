@@ -45,6 +45,12 @@ class DocumentStore {
          */
         [[nodiscard]] std::size_t size() const noexcept;
 
+        /**
+         * @brief Exposes document metadata in contiguous DocumentId order.
+         * @return A read-only view valid until the store is modified.
+         */
+        [[nodiscard]] const std::vector<DocumentMeta> &all() const noexcept;
+
       private:
         std::vector<DocumentMeta> documents_;
 };
