@@ -1,6 +1,6 @@
 function(add_snowseek_test name source)
     set(target "snowseek_${name}_tests")
-    add_executable(${target} ${source})
+    add_executable(${target} ${source} ${ARGN})
     target_link_libraries(${target} PRIVATE SnowSeek::core)
     target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_features(${target} PRIVATE cxx_std_20)
@@ -23,3 +23,5 @@ add_snowseek_test(index_builder integration/index_builder_test.cpp)
 add_snowseek_test(posting_operations unit/posting_operations_test.cpp)
 add_snowseek_test(in_memory_query integration/in_memory_query_test.cpp)
 add_snowseek_test(persistent_query integration/persistent_query_test.cpp)
+add_snowseek_test(cli integration/cli_test.cpp
+    ${PROJECT_SOURCE_DIR}/src/cli/application.cpp)
