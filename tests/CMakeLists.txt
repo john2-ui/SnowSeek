@@ -10,7 +10,6 @@ endfunction()
 
 add_snowseek_test(tokenizer unit/tokenizer_test.cpp)
 add_snowseek_test(scanner unit/scanner_test.cpp)
-add_snowseek_test(bm25 unit/bm25_test.cpp)
 add_snowseek_test(binary_codec unit/binary_codec_test.cpp)
 add_snowseek_test(checksum unit/checksum_test.cpp)
 add_snowseek_test(index_header unit/index_header_test.cpp)

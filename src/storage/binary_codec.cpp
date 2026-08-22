@@ -28,7 +28,7 @@ namespace {
 }
 
 /**
- * @brief Ensures a completed fixed-width or Varint write reached the stream.
+ * @brief Ensures a completed fixed-width write reached the stream.
  * @param output Destination stream to inspect.
  * @throws std::runtime_error If the stream rejected any output byte.
  */
@@ -70,41 +70,6 @@ std::uint64_t read_u64_le(std::istream &input) {
                          << shift;
         }
         return value;
-}
-
-void write_varint_u64(std::ostream &output, std::uint64_t value) {
-        do {
-                std::uint8_t byte = static_cast<std::uint8_t>(value & 0x7fU);
-                value >>= 7U;
-                if (value != 0) {
-                        byte |= 0x80U;
-                }
-                output.put(static_cast<char>(byte));
-        } while (value != 0);
-        require_write(output);
-}
-
-std::uint64_t read_varint_u64(std::istream &input) {
-        std::uint64_t value = 0;
-        for (unsigned int byte_index = 0; byte_index < 10; ++byte_index) {
-                const auto byte = read_byte(input, "Varint");
-                const auto payload = static_cast<std::uint8_t>(byte & 0x7fU);
-
-                if (byte_index == 9 && (byte & 0xfeU) != 0) {
-                        throw std::runtime_error("Varint exceeds uint64_t");
-                }
-                value |= static_cast<std::uint64_t>(payload)
-                         << (byte_index * 7U);
-
-                if ((byte & 0x80U) == 0) {
-                        if (byte_index != 0 && payload == 0) {
-                                throw std::runtime_error(
-                                        "Varint encoding is not canonical");
-                        }
-                        return value;
-                }
-        }
-        throw std::runtime_error("Varint exceeds ten bytes");
 }
 
 } // namespace snowseek::storage

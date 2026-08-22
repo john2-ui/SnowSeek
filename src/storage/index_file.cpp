@@ -559,8 +559,4 @@ LoadedIndex read_index_file(const std::filesystem::path &path) {
         return loaded;
 }
 
-IndexFileStats inspect_index_file(const std::filesystem::path &path) {
-        return read_index_file(path).stats;
-}
-
 } // namespace snowseek::storage

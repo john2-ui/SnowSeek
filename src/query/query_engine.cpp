@@ -35,13 +35,12 @@ normalize_query_term(const analysis::Tokenizer &tokenizer,
 
 } // namespace
 
-QueryEngine::QueryEngine(std::filesystem::path index_directory)
-    : index_directory_(std::move(index_directory)),
-      loaded_(storage::read_index_file(index_directory_ /
+QueryEngine::QueryEngine(const std::filesystem::path &index_directory)
+    : loaded_(storage::read_index_file(index_directory /
                                        storage::kSegmentFileName)) {}
 
-std::vector<SearchResult> QueryEngine::search(std::string_view expression,
-                                              std::size_t top_k) const {
+std::vector<std::filesystem::path>
+QueryEngine::search(std::string_view expression, std::size_t top_k) const {
         if (expression.empty()) {
                 throw std::invalid_argument(
                         "query expression must not be empty");
@@ -58,7 +57,7 @@ std::vector<SearchResult> QueryEngine::search(std::string_view expression,
                 fields.push_back(std::move(field));
         }
         const InMemoryQueryEngine engine(loaded_.documents, loaded_.index);
-        std::vector<SearchResult> results;
+        std::vector<std::filesystem::path> results;
         if (fields.size() == 1) {
                 const auto matches = engine.search_term(fields[0]);
                 results.reserve(std::min(top_k, matches.size()));
@@ -66,7 +65,7 @@ std::vector<SearchResult> QueryEngine::search(std::string_view expression,
                         if (results.size() == top_k) {
                                 break;
                         }
-                        results.push_back(SearchResult{match.path, 0, 0.0, {}});
+                        results.push_back(match.path);
                 }
                 return results;
         }
@@ -86,7 +85,7 @@ std::vector<SearchResult> QueryEngine::search(std::string_view expression,
                 if (results.size() == top_k) {
                         break;
                 }
-                results.push_back(SearchResult{match.path, 0, 0.0, {}});
+                results.push_back(match.path);
         }
         return results;
 }

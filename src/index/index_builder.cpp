@@ -229,13 +229,6 @@ InMemoryIndexBuilder::build(const std::filesystem::path &source) const {
         return result;
 }
 
-IndexBuilder::IndexBuilder(BuildOptions options) : options_(options) {
-        if (options_.memory_limit_bytes == 0 || options_.threads == 0) {
-                throw std::invalid_argument(
-                        "memory limit and thread count must be non-zero");
-        }
-}
-
 PersistentBuildResult
 IndexBuilder::build(const std::filesystem::path &source,
                     const std::filesystem::path &index_directory) const {
@@ -274,7 +267,7 @@ IndexBuilder::build(const std::filesystem::path &source,
         // visible v1 file. Durability fsync and crash recovery remain M5 work.
         static_cast<void>(storage::write_index_file(
                 temporary_file, relative_documents, in_memory.index));
-        static_cast<void>(storage::inspect_index_file(temporary_file));
+        static_cast<void>(storage::read_index_file(temporary_file));
         std::error_code rename_error;
         std::filesystem::rename(temporary_file, index_file, rename_error);
         if (rename_error) {

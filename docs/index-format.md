@@ -130,16 +130,11 @@ values in Posting order. Positions for one Posting are strictly increasing.
 Delta and Varint compression require a later format version or feature and are
 deferred to M6.
 
-## 4. Checksums and Varints
+## 4. Checksums
 
 CRC32C uses the reflected Castagnoli polynomial `0x82F63B78`, an initial state
 of `0xFFFFFFFF`, and a final XOR of `0xFFFFFFFF`. The check value for ASCII
 `123456789` is `0xE3069283`.
-
-The shared binary codec defines canonical unsigned LEB128 for future encoded
-regions. A `u64` uses at most ten bytes; the tenth byte may contain only bit
-zero. Truncated, overflowing, longer-than-ten-byte, and overlong noncanonical
-representations are invalid. Version 1 section records above remain fixed-width.
 
 ## 5. Compatibility
 

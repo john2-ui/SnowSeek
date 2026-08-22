@@ -6,7 +6,6 @@
 #include "snowseek/filesystem/scanner.hpp"
 #include "snowseek/index/index.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -70,12 +69,6 @@ class InMemoryIndexBuilder {
         InMemoryBuildOptions options_;
 };
 
-struct BuildOptions {
-        std::size_t memory_limit_bytes = 64U * 1024U * 1024U;
-        unsigned int threads = 1;
-        bool store_positions = true;
-};
-
 struct PersistentBuildResult {
         std::filesystem::path index_file;
         InMemoryBuildStats stats;
@@ -85,13 +78,6 @@ struct PersistentBuildResult {
 
 class IndexBuilder {
       public:
-        /**
-         * @brief Creates a persistent-index builder configuration.
-         * @param options Memory, concurrency, and positional-index settings.
-         * @throws std::invalid_argument If memory or thread limits are zero.
-         */
-        explicit IndexBuilder(BuildOptions options = {});
-
         /**
          * @brief Prepares an index directory for a source tree.
          * @param source Existing source path to index.
@@ -105,9 +91,6 @@ class IndexBuilder {
         [[nodiscard]] PersistentBuildResult
         build(const std::filesystem::path &source,
               const std::filesystem::path &index_directory) const;
-
-      private:
-        BuildOptions options_;
 };
 
 } // namespace snowseek::index

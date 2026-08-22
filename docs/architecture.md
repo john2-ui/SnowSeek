@@ -6,7 +6,7 @@ SnowSeek 按依赖方向拆分为 `filesystem/document/analysis`、`index/storag
 
 ```text
 CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Storage
-      └── QueryEngine ── Parser + PostingReader ── BM25 + Top-K
+      └── QueryEngine ── Tokenizer + Posting intersection
 ```
 
 磁盘 Segment 只追加且不可变。Manifest 是已提交 Segment 的唯一发布入口，查询端

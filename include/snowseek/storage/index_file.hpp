@@ -47,13 +47,4 @@ write_index_file(const std::filesystem::path &path,
  */
 [[nodiscard]] LoadedIndex read_index_file(const std::filesystem::path &path);
 
-/**
- * @brief Performs full structural and checksum verification of a Segment.
- * @param path Segment file to validate.
- * @return Statistics from the validated file.
- * @throws std::runtime_error If any format invariant fails.
- */
-[[nodiscard]] IndexFileStats
-inspect_index_file(const std::filesystem::path &path);
-
 } // namespace snowseek::storage

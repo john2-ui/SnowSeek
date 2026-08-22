@@ -19,9 +19,8 @@ void print_help() {
         std::cout << "SnowSeek " << kVersion << "\n\n"
                   << "Usage:\n"
                   << "  snowseek index <source> --index <dir>\n"
-                  << "  snowseek update <source> --index <dir>\n"
                   << "  snowseek query <index> <expression>\n"
-                  << "  snowseek stats|verify|compact <index>\n";
+                  << "  snowseek stats|verify <index>\n";
 }
 
 /**
@@ -60,8 +59,8 @@ int run_index(const std::filesystem::path &source,
 int run_query(const std::filesystem::path &index_directory,
               std::string_view expression) {
         const query::QueryEngine engine(index_directory);
-        for (const auto &result : engine.search(expression)) {
-                std::cout << result.path.string() << '\n';
+        for (const auto &path : engine.search(expression)) {
+                std::cout << path.string() << '\n';
         }
         return 0;
 }
@@ -72,8 +71,9 @@ int run_query(const std::filesystem::path &index_directory,
  * @return Zero after successful validation and output.
  */
 int run_stats(const std::filesystem::path &index_directory) {
-        const auto stats = storage::inspect_index_file(
-                index_directory / storage::kSegmentFileName);
+        const auto stats = storage::read_index_file(
+                                   index_directory / storage::kSegmentFileName)
+                                   .stats;
         std::cout << "documents=" << stats.document_count << '\n'
                   << "terms=" << stats.term_count << '\n'
                   << "postings=" << stats.posting_count << '\n'
@@ -88,7 +88,7 @@ int run_stats(const std::filesystem::path &index_directory) {
  * @return Zero when every structural and checksum invariant holds.
  */
 int run_verify(const std::filesystem::path &index_directory) {
-        static_cast<void>(storage::inspect_index_file(
+        static_cast<void>(storage::read_index_file(
                 index_directory / storage::kSegmentFileName));
         std::cout << "index verified\n";
         return 0;

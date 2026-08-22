@@ -37,21 +37,4 @@ void write_u64_le(std::ostream &output, std::uint64_t value);
  */
 [[nodiscard]] std::uint64_t read_u64_le(std::istream &input);
 
-/**
- * @brief Writes a canonical unsigned LEB128 representation of a 64-bit value.
- * @param output Destination stream positioned at the write location.
- * @param value Integer to encode in at most ten bytes.
- * @throws std::runtime_error If the complete encoding cannot be written.
- */
-void write_varint_u64(std::ostream &output, std::uint64_t value);
-
-/**
- * @brief Reads a canonical unsigned LEB128 representation of a 64-bit value.
- * @param input Source stream positioned at the encoded integer.
- * @return The decoded integer.
- * @throws std::runtime_error If the encoding is truncated, overflows 64 bits,
- * exceeds ten bytes, or uses a noncanonical overlong representation.
- */
-[[nodiscard]] std::uint64_t read_varint_u64(std::istream &input);
-
 } // namespace snowseek::storage

@@ -63,7 +63,7 @@
 - 先编写 `docs/index-format.md`，再实现磁盘编码；
 - 定义 Magic、版本、Feature Flags、Offset、Length 和字节序；
 - 实现 Documents、Paths、Terms、Postings、Positions 区域；
-- 实现 Varint 基础组件和区域 Checksum；
+- 实现区域 Checksum；
 - 增加 `stats`、`verify` 命令；
 - 对所有磁盘输入执行溢出和边界检查。
 
@@ -185,4 +185,3 @@
 5. 实现单词查询和 Posting AND；
 6. 将 M1 闭环接入 CLI；
 7. 冻结首版磁盘格式文档后进入 M2。
-

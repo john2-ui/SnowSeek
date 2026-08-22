@@ -72,7 +72,7 @@ void builds_reopens_and_queries() {
         const auto term = engine.search("TIMEOUT");
         snowseek::test::require_equal(term.size(), std::size_t{1},
                                       "term query should survive reopen");
-        snowseek::test::require_equal(term[0].path,
+        snowseek::test::require_equal(term[0],
                                       std::filesystem::path("a.txt"),
                                       "query paths should be source-relative");
         const auto conjunction = engine.search("retry and policy");
@@ -118,7 +118,7 @@ void publishes_partial_index_with_diagnostics() {
         const auto matches = engine.search("safe");
         snowseek::test::require_equal(matches.size(), std::size_t{1},
                                       "successful documents should publish");
-        snowseek::test::require_equal(matches[0].path,
+        snowseek::test::require_equal(matches[0],
                                       std::filesystem::path("a-valid.txt"),
                                       "partial index paths should remain stable");
 }
