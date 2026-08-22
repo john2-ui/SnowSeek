@@ -1,5 +1,7 @@
 #include "snowseek/index/index_builder.hpp"
 
+#include "snowseek/storage/index_file.hpp"
+
 #include <cerrno>
 #include <cstdint>
 #include <limits>
@@ -234,14 +236,57 @@ IndexBuilder::IndexBuilder(BuildOptions options) : options_(options) {
         }
 }
 
-void IndexBuilder::build(const std::filesystem::path &source,
-                         const std::filesystem::path &index_directory) const {
+PersistentBuildResult
+IndexBuilder::build(const std::filesystem::path &source,
+                    const std::filesystem::path &index_directory) const {
         if (!std::filesystem::exists(source)) {
                 throw std::runtime_error("source path does not exist: " +
                                          source.string());
         }
+
+        // Build the complete logical snapshot before creating any destination
+        // file, preserving per-document failure isolation.
+        const auto canonical_source = std::filesystem::weakly_canonical(source);
+        auto in_memory = InMemoryIndexBuilder{}.build(canonical_source);
+
+        // Persist source-relative paths so the index directory can be moved
+        // without embedding machine-specific absolute corpus roots.
+        document::DocumentStore relative_documents;
+        for (const auto &document : in_memory.documents.all()) {
+                const auto relative =
+                        document.path.lexically_relative(canonical_source);
+                if (relative.empty() || relative.is_absolute()) {
+                        throw std::runtime_error("indexed document is outside "
+                                                 "the source root: " +
+                                                 document.path.string());
+                }
+                const auto id =
+                        relative_documents.add(relative, document.file_size,
+                                               document.modified_time_ns);
+                relative_documents.set_token_count(id, document.token_count);
+        }
+
         std::filesystem::create_directories(index_directory);
-        // M1-M2: scanner, tokenizer and segment writer will be connected here.
+        const auto index_file = index_directory / storage::kSegmentFileName;
+        const auto temporary_file = index_file.string() + ".tmp";
+
+        // Write and fully re-read the temporary Segment before replacing the
+        // visible v1 file. Durability fsync and crash recovery remain M5 work.
+        static_cast<void>(storage::write_index_file(
+                temporary_file, relative_documents, in_memory.index));
+        static_cast<void>(storage::inspect_index_file(temporary_file));
+        std::error_code rename_error;
+        std::filesystem::rename(temporary_file, index_file, rename_error);
+        if (rename_error) {
+                std::error_code remove_error;
+                std::filesystem::remove(temporary_file, remove_error);
+                throw std::runtime_error("failed to publish index file: " +
+                                         rename_error.message());
+        }
+
+        return PersistentBuildResult{index_file, in_memory.stats,
+                                     std::move(in_memory.scan_errors),
+                                     std::move(in_memory.document_errors)};
 }
 
 } // namespace snowseek::index

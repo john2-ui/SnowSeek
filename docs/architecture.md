@@ -11,6 +11,7 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 
 磁盘 Segment 只追加且不可变。Manifest 是已提交 Segment 的唯一发布入口，查询端
 只读取 Manifest 可见的数据。所有跨平台磁盘数据使用固定宽度整数和显式字节序。
+首版 Segment 的精确布局和兼容性规则见 [index-format.md](index-format.md)。
 
 `document::TextReader` 使用固定大小缓冲区读取原文，并通过回调输出不跨越 UTF-8
 字符边界的文本块。非法 UTF-8 默认替换为 U+FFFD，也可使用严格模式在首个错误的
@@ -33,3 +34,8 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 一致的 Tokenizer 规范化单词查询。两词 AND 查询使用双指针线性求交，结果
 仅按 DocumentId 升序返回。该内存查询层不依赖面向磁盘索引的 `QueryEngine`，
 当前不包含相关性排序、Top-K 或查询表达式解析。
+
+M2 使用单个不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
+Header 与每个区域分别使用 CRC32C 校验，所有整数显式使用小端编码；加载器在构造
+查询结构前验证版本、边界、顺序、计数与校验和。`IndexBuilder` 写入同目录临时文件
+并自校验后发布，`QueryEngine` 重新加载 Segment 后支持单词及两词 AND 查询。

@@ -76,6 +76,13 @@ struct BuildOptions {
         bool store_positions = true;
 };
 
+struct PersistentBuildResult {
+        std::filesystem::path index_file;
+        InMemoryBuildStats stats;
+        std::vector<filesystem::ScanError> scan_errors;
+        std::vector<BuildError> document_errors;
+};
+
 class IndexBuilder {
       public:
         /**
@@ -89,12 +96,15 @@ class IndexBuilder {
          * @brief Prepares an index directory for a source tree.
          * @param source Existing source path to index.
          * @param index_directory Destination directory created when necessary.
-         * @throws std::runtime_error If source does not exist.
+         * @return Output path, build statistics, and recoverable diagnostics.
+         * @throws std::runtime_error If source does not exist or persistence
+         * fails.
          * @throws std::filesystem::filesystem_error If destination creation
          * fails.
          */
-        void build(const std::filesystem::path &source,
-                   const std::filesystem::path &index_directory) const;
+        [[nodiscard]] PersistentBuildResult
+        build(const std::filesystem::path &source,
+              const std::filesystem::path &index_directory) const;
 
       private:
         BuildOptions options_;

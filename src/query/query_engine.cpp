@@ -2,6 +2,9 @@
 
 #include "snowseek/query/posting_operations.hpp"
 
+#include <algorithm>
+#include <cctype>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -33,7 +36,9 @@ normalize_query_term(const analysis::Tokenizer &tokenizer,
 } // namespace
 
 QueryEngine::QueryEngine(std::filesystem::path index_directory)
-    : index_directory_(std::move(index_directory)) {}
+    : index_directory_(std::move(index_directory)),
+      loaded_(storage::read_index_file(index_directory_ /
+                                       storage::kSegmentFileName)) {}
 
 std::vector<SearchResult> QueryEngine::search(std::string_view expression,
                                               std::size_t top_k) const {
@@ -44,9 +49,46 @@ std::vector<SearchResult> QueryEngine::search(std::string_view expression,
         if (top_k == 0) {
                 return {};
         }
-        // M3: parser, posting reader, planner and ranker will be connected
-        // here.
-        return {};
+
+        // M2 accepts either one token-shaped input or two operands joined by a
+        // case-insensitive AND keyword. Full parsing remains M3 work.
+        std::istringstream parser{std::string(expression)};
+        std::vector<std::string> fields;
+        for (std::string field; parser >> field;) {
+                fields.push_back(std::move(field));
+        }
+        const InMemoryQueryEngine engine(loaded_.documents, loaded_.index);
+        std::vector<SearchResult> results;
+        if (fields.size() == 1) {
+                const auto matches = engine.search_term(fields[0]);
+                results.reserve(std::min(top_k, matches.size()));
+                for (const auto &match : matches) {
+                        if (results.size() == top_k) {
+                                break;
+                        }
+                        results.push_back(SearchResult{match.path, 0, 0.0, {}});
+                }
+                return results;
+        }
+        std::string operation = fields.size() == 3 ? fields[1] : std::string{};
+        std::transform(operation.begin(), operation.end(), operation.begin(),
+                       [](unsigned char character) {
+                               return static_cast<char>(
+                                       std::toupper(character));
+                       });
+        if (fields.size() != 3 || operation != "AND") {
+                throw std::invalid_argument(
+                        "query must be one term or 'term AND term'");
+        }
+        const auto matches = engine.search_and(fields[0], fields[2]);
+        results.reserve(std::min(top_k, matches.size()));
+        for (const auto &match : matches) {
+                if (results.size() == top_k) {
+                        break;
+                }
+                results.push_back(SearchResult{match.path, 0, 0.0, {}});
+        }
+        return results;
 }
 
 InMemoryQueryEngine::InMemoryQueryEngine(

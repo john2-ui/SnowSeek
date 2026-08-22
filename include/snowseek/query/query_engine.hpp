@@ -3,6 +3,7 @@
 #include "snowseek/analysis/tokenizer.hpp"
 #include "snowseek/document/document_store.hpp"
 #include "snowseek/index/index.hpp"
+#include "snowseek/storage/index_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -40,6 +41,7 @@ class QueryEngine {
 
       private:
         std::filesystem::path index_directory_;
+        storage::LoadedIndex loaded_;
 };
 
 struct InMemoryTermMatch {
