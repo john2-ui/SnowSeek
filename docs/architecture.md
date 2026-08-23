@@ -41,3 +41,10 @@ DocumentId 集合执行布尔运算，短语命中额外验证连续 Position。
 频率从小到大求交；匹配文档按正向去重词项的 BM25 之和评分，通过固定容量堆保留
 Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 v1 索引，调用方可显式提供
 `source_root`，引擎只为最终 Top-K 读取原文并生成 UTF-8 行片段。
+
+M4 的第一步为当前全内存构建增加容量驱动的观测统计。`DocumentStore` 按文档数组
+capacity 和路径字符串 capacity 估算文档表；`InMemoryIndex` 按哈希桶、词典节点、
+词项字符串、Posting 与 Position 数组 capacity 分类估算。构建器另行记录扫描路径、
+诊断、`TextReader` 缓冲区和单文档 Token 临时存储，并对持久化自校验期间同时驻留的
+索引计入保守合计。这些估算不包含 allocator 元数据、运行库和内核页，也不负责限制
+内存。Linux 基准使用 `getrusage(RUSAGE_SELF)` 独立记录进程峰值 RSS 进行校准。

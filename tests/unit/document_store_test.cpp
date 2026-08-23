@@ -58,6 +58,24 @@ void rejects_unknown_document_ids() {
                 "updating an unknown document should fail");
 }
 
+/** @brief Verifies capacity-based document memory estimates grow with data. */
+void estimates_retained_memory() {
+        snowseek::document::DocumentStore store;
+        snowseek::test::require_equal(
+                store.estimated_memory_bytes(), std::uint64_t{0},
+                "an empty document store should retain no dynamic storage");
+
+        static_cast<void>(store.add("first-document.txt", 1, 2));
+        const auto first = store.estimated_memory_bytes();
+        static_cast<void>(store.add("nested/second-document.cpp", 3, 4));
+        const auto second = store.estimated_memory_bytes();
+        snowseek::test::require(first > 0,
+                                "one document should retain estimated memory");
+        snowseek::test::require(
+                second > first,
+                "additional documents should increase the estimate");
+}
+
 } // namespace
 
 /** @brief Runs the document-store unit-test suite. */
@@ -68,5 +86,6 @@ int main() {
                 {"stores and updates document metadata",
                  stores_and_updates_document_metadata},
                 {"rejects unknown document ids", rejects_unknown_document_ids},
+                {"estimates retained memory", estimates_retained_memory},
         });
 }

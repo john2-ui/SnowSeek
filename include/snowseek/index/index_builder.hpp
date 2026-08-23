@@ -24,12 +24,22 @@ struct BuildError {
         std::string message;
 };
 
+struct BuildMemoryStats {
+        std::uint64_t metadata_bytes{};
+        std::uint64_t reader_peak_bytes{};
+        std::uint64_t token_peak_bytes{};
+        std::uint64_t dictionary_bytes{};
+        std::uint64_t posting_bytes{};
+        std::uint64_t estimated_peak_bytes{};
+};
+
 struct InMemoryBuildStats {
         std::uint64_t scanned_files{};
         std::uint64_t indexed_files{};
         std::uint64_t failed_files{};
         std::uint64_t indexed_bytes{};
         std::uint64_t token_count{};
+        BuildMemoryStats memory;
 };
 
 struct InMemoryBuildResult {

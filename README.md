@@ -1,7 +1,7 @@
 # SnowSeek
 
 SnowSeek 是一个面向嵌入式 Linux 的零第三方运行依赖本地全文检索引擎，使用
-C++20 实现。项目当前已完成 M3 查询与排序闭环。
+C++20 实现。项目当前已完成 M3 查询与排序闭环，以及 M4 的构建内存统计与基线。
 
 ## 构建
 
@@ -26,6 +26,8 @@ cmake --build build
 
 索引写入 `segment-0000000000000001.idx`，保存相对源目录的文档路径。若个别文件
 无法读取或分析，成功文档仍会发布，但 `index` 返回状态码 2 并输出诊断。
+`index` 同时输出 `memory_*_bytes` 分类估算；这些数值按容器容量计算，用于观察
+当前全内存构建，不等同于实际 RSS，也不包含分配器、运行库和内核页开销。
 
 查询表达式支持括号、大小写不敏感的 `AND`、`OR`、`NOT`、双引号精确短语、
 `path:` Glob 和 `extension:` 精确扩展名过滤。相邻词项不会隐式连接，必须显式写
@@ -44,6 +46,9 @@ cmake --build build
 
 可通过 `SNOWSEEK_BUILD_JOBS` 调整并行任务数，通过 `SNOWSEEK_BUILD_ROOT`
 指定构建产物目录。
+
+可选的确定性索引基准、参数和当前实测见
+[docs/memory-baseline.md](docs/memory-baseline.md)。
 
 ## 目录
 

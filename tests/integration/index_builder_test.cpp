@@ -273,6 +273,94 @@ void returns_scan_errors_for_a_missing_root() {
                                       "a missing root has no candidate files");
 }
 
+/** @brief Verifies classified memory estimates and repeatability. */
+void reports_deterministic_memory_estimates() {
+        const TemporaryDirectory temporary;
+        write_file(temporary.path() / "a.txt", "alpha beta alpha");
+        write_file(temporary.path() / "b.txt", "beta gamma");
+
+        snowseek::index::InMemoryBuildOptions options;
+        options.read_options.chunk_size = 2;
+        const snowseek::index::InMemoryIndexBuilder builder(options);
+        const auto first = builder.build(temporary.path());
+        const auto second = builder.build(temporary.path());
+
+        const auto &memory = first.stats.memory;
+        snowseek::test::require(
+                memory.metadata_bytes > 0 && memory.reader_peak_bytes > 0 &&
+                        memory.token_peak_bytes > 0 &&
+                        memory.dictionary_bytes > 0 && memory.posting_bytes > 0,
+                "a nonempty corpus should populate every memory category");
+        snowseek::test::require_equal(
+                memory.estimated_peak_bytes,
+                memory.metadata_bytes + memory.reader_peak_bytes +
+                        memory.token_peak_bytes + memory.dictionary_bytes +
+                        memory.posting_bytes,
+                "the peak estimate should sum all classified bytes");
+        const auto &repeated = second.stats.memory;
+        snowseek::test::require(
+                memory.metadata_bytes == repeated.metadata_bytes &&
+                        memory.reader_peak_bytes ==
+                                repeated.reader_peak_bytes &&
+                        memory.token_peak_bytes == repeated.token_peak_bytes &&
+                        memory.dictionary_bytes == repeated.dictionary_bytes &&
+                        memory.posting_bytes == repeated.posting_bytes &&
+                        memory.estimated_peak_bytes ==
+                                repeated.estimated_peak_bytes,
+                "memory estimates should be stable across repeated builds");
+}
+
+/** @brief Verifies an empty corpus reports no retained build memory. */
+void reports_zero_memory_for_an_empty_corpus() {
+        const TemporaryDirectory temporary;
+        const auto result =
+                snowseek::index::InMemoryIndexBuilder{}.build(temporary.path());
+        const auto &memory = result.stats.memory;
+        snowseek::test::require_equal(memory.metadata_bytes, std::uint64_t{0},
+                                      "empty metadata should estimate zero");
+        snowseek::test::require_equal(memory.reader_peak_bytes,
+                                      std::uint64_t{0},
+                                      "an unused reader should estimate zero");
+        snowseek::test::require_equal(
+                memory.token_peak_bytes, std::uint64_t{0},
+                "empty token storage should estimate zero");
+        snowseek::test::require_equal(
+                memory.dictionary_bytes, std::uint64_t{0},
+                "an empty dictionary should estimate zero");
+        snowseek::test::require_equal(memory.posting_bytes, std::uint64_t{0},
+                                      "empty postings should estimate zero");
+        snowseek::test::require_equal(
+                memory.estimated_peak_bytes, std::uint64_t{0},
+                "an empty build should estimate zero total bytes");
+}
+
+/** @brief Verifies failed parsing still contributes transient memory peaks. */
+void counts_failed_document_buffers() {
+        const TemporaryDirectory temporary;
+        write_file(temporary.path() / "too-long.txt", "oversized");
+
+        snowseek::index::InMemoryBuildOptions options;
+        options.read_options.chunk_size = 2;
+        options.tokenizer_options.max_token_length = 4;
+        const auto result =
+                snowseek::index::InMemoryIndexBuilder(options).build(
+                        temporary.path());
+
+        snowseek::test::require_equal(
+                result.stats.failed_files, std::uint64_t{1},
+                "the oversized token should fail the only document");
+        snowseek::test::require(result.stats.memory.reader_peak_bytes > 0 &&
+                                        result.stats.memory.token_peak_bytes >
+                                                0,
+                                "failed parsing should retain transient peaks");
+        snowseek::test::require_equal(
+                result.stats.memory.dictionary_bytes, std::uint64_t{0},
+                "failed documents should not allocate dictionary entries");
+        snowseek::test::require_equal(
+                result.stats.memory.posting_bytes, std::uint64_t{0},
+                "failed documents should not allocate postings");
+}
+
 } // namespace
 
 /** @brief Runs the in-memory-index-builder integration-test suite. */
@@ -287,5 +375,11 @@ int main() {
                  does_not_commit_failed_documents},
                 {"returns scan errors for a missing root",
                  returns_scan_errors_for_a_missing_root},
+                {"reports deterministic memory estimates",
+                 reports_deterministic_memory_estimates},
+                {"reports zero memory for an empty corpus",
+                 reports_zero_memory_for_an_empty_corpus},
+                {"counts failed document buffers",
+                 counts_failed_document_buffers},
         });
 }

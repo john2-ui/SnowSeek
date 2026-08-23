@@ -92,6 +92,45 @@ void missing_lookups_do_not_modify_the_dictionary() {
                 "a missing lookup should not modify the dictionary");
 }
 
+/** @brief Verifies dictionary and posting estimates track retained capacity. */
+void estimates_retained_memory() {
+        snowseek::index::InMemoryIndex index;
+        const auto empty = index.estimated_memory_usage();
+        snowseek::test::require_equal(
+                empty.dictionary_bytes, std::uint64_t{0},
+                "an empty dictionary should retain no estimated bytes");
+        snowseek::test::require_equal(
+                empty.posting_bytes, std::uint64_t{0},
+                "an empty index should retain no posting bytes");
+
+        index.add_occurrence("alpha", 0, 0);
+        const auto first = index.estimated_memory_usage();
+        index.add_occurrence("alpha", 0, 1);
+        const auto repeated = index.estimated_memory_usage();
+        index.add_occurrence("alpha", 1, 0);
+        const auto second_posting = index.estimated_memory_usage();
+        index.add_occurrence("beta", 0, 2);
+        const auto second_term = index.estimated_memory_usage();
+
+        snowseek::test::require(
+                first.dictionary_bytes > 0 && first.posting_bytes > 0,
+                "one occurrence should allocate both categories");
+        snowseek::test::require_equal(
+                repeated.dictionary_bytes, first.dictionary_bytes,
+                "another position should not grow the dictionary");
+        snowseek::test::require(repeated.posting_bytes > first.posting_bytes,
+                                "another position should grow posting storage");
+        snowseek::test::require_equal(
+                second_posting.dictionary_bytes, repeated.dictionary_bytes,
+                "another posting should not grow the dictionary");
+        snowseek::test::require(second_posting.posting_bytes >
+                                        repeated.posting_bytes,
+                                "another posting should grow posting storage");
+        snowseek::test::require(second_term.dictionary_bytes >
+                                        second_posting.dictionary_bytes,
+                                "a unique term should grow dictionary storage");
+}
+
 } // namespace
 
 /** @brief Runs the in-memory-index unit-test suite. */
@@ -104,5 +143,6 @@ int main() {
                 {"rejects empty terms", rejects_empty_terms},
                 {"missing lookups do not modify the dictionary",
                  missing_lookups_do_not_modify_the_dictionary},
+                {"estimates retained memory", estimates_retained_memory},
         });
 }

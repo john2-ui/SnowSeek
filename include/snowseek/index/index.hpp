@@ -27,6 +27,11 @@ struct Posting {
 
 using PostingList = std::vector<Posting>;
 
+struct InMemoryIndexMemoryUsage {
+        std::uint64_t dictionary_bytes{};
+        std::uint64_t posting_bytes{};
+};
+
 class InMemoryIndex {
       public:
         /**
@@ -60,6 +65,14 @@ class InMemoryIndex {
          * @return A sorted copy of the normalized term strings.
          */
         [[nodiscard]] std::vector<std::string> sorted_terms() const;
+
+        /**
+         * @brief Estimates dynamic storage retained by the in-memory index.
+         * @return Conservative capacity-based dictionary and posting bytes.
+         * @throws std::overflow_error If either estimate exceeds std::uint64_t.
+         * @note Allocator metadata and runtime-library overhead are excluded.
+         */
+        [[nodiscard]] InMemoryIndexMemoryUsage estimated_memory_usage() const;
 
       private:
         std::unordered_map<std::string, PostingList> dictionary_;

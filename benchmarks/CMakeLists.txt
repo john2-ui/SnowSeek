@@ -9,3 +9,10 @@ target_link_libraries(snowseek_posting_intersection_benchmark
                       PRIVATE SnowSeek::core)
 target_compile_features(snowseek_posting_intersection_benchmark PRIVATE cxx_std_20)
 snowseek_enable_warnings(snowseek_posting_intersection_benchmark)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_executable(snowseek_index_builder_benchmark index_builder_benchmark.cpp)
+    target_link_libraries(snowseek_index_builder_benchmark PRIVATE SnowSeek::core)
+    target_compile_features(snowseek_index_builder_benchmark PRIVATE cxx_std_20)
+    snowseek_enable_warnings(snowseek_index_builder_benchmark)
+endif()

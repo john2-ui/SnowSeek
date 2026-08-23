@@ -1,11 +1,19 @@
 #include "snowseek/index/index.hpp"
 
+#include "snowseek/common/checked_arithmetic.hpp"
+
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
 namespace snowseek::index {
+namespace {
+
+using common::detail::checked_add;
+using common::detail::checked_multiply;
+
+} // namespace
 
 std::uint32_t Posting::term_frequency() const {
         if (positions.size() > std::numeric_limits<std::uint32_t>::max()) {
@@ -72,6 +80,44 @@ std::vector<std::string> InMemoryIndex::sorted_terms() const {
         }
         std::sort(terms.begin(), terms.end());
         return terms;
+}
+
+InMemoryIndexMemoryUsage InMemoryIndex::estimated_memory_usage() const {
+        if (dictionary_.empty()) {
+                return {};
+        }
+
+        InMemoryIndexMemoryUsage usage;
+        usage.dictionary_bytes = checked_multiply(dictionary_.bucket_count(),
+                                                  sizeof(void *), "dictionary");
+        usage.dictionary_bytes = checked_add(
+                usage.dictionary_bytes,
+                checked_multiply(
+                        dictionary_.size(),
+                        sizeof(typename decltype(dictionary_)::value_type),
+                        "dictionary"),
+                "dictionary");
+
+        for (const auto &[term, postings] : dictionary_) {
+                usage.dictionary_bytes = checked_add(
+                        usage.dictionary_bytes,
+                        checked_multiply(term.capacity(), sizeof(char),
+                                         "dictionary term"),
+                        "dictionary");
+                usage.posting_bytes = checked_add(
+                        usage.posting_bytes,
+                        checked_multiply(postings.capacity(), sizeof(Posting),
+                                         "posting list"),
+                        "posting");
+                for (const auto &posting : postings) {
+                        usage.posting_bytes = checked_add(
+                                usage.posting_bytes,
+                                checked_multiply(posting.positions.capacity(),
+                                                 sizeof(Position), "position"),
+                                "posting");
+                }
+        }
+        return usage;
 }
 
 } // namespace snowseek::index

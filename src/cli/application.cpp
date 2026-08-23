@@ -256,7 +256,19 @@ int run_index(const std::filesystem::path &source,
                   << "scanned=" << result.stats.scanned_files << '\n'
                   << "indexed=" << result.stats.indexed_files << '\n'
                   << "failed=" << result.stats.failed_files << '\n'
-                  << "tokens=" << result.stats.token_count << '\n';
+                  << "tokens=" << result.stats.token_count << '\n'
+                  << "memory_metadata_bytes="
+                  << result.stats.memory.metadata_bytes << '\n'
+                  << "memory_reader_peak_bytes="
+                  << result.stats.memory.reader_peak_bytes << '\n'
+                  << "memory_token_peak_bytes="
+                  << result.stats.memory.token_peak_bytes << '\n'
+                  << "memory_dictionary_bytes="
+                  << result.stats.memory.dictionary_bytes << '\n'
+                  << "memory_posting_bytes="
+                  << result.stats.memory.posting_bytes << '\n'
+                  << "memory_estimated_peak_bytes="
+                  << result.stats.memory.estimated_peak_bytes << '\n';
         return result.scan_errors.empty() && result.document_errors.empty() ? 0
                                                                             : 2;
 }

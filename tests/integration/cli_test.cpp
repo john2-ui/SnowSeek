@@ -77,7 +77,8 @@ InvocationResult invoke_captured(std::vector<std::string> arguments) {
 }
 
 /** @brief Writes a CLI corpus fixture. */
-void write_file(const std::filesystem::path &path, const std::string &contents) {
+void write_file(const std::filesystem::path &path,
+                const std::string &contents) {
         std::ofstream output(path, std::ios::binary);
         output << contents;
         if (!output) {
@@ -93,10 +94,19 @@ void runs_index_query_stats_and_verify() {
         std::filesystem::create_directory(source);
         write_file(source / "a.txt", "timeout retry");
 
-        snowseek::test::require_equal(
-                invoke({"snowseek", "index", source.string(), "--index",
-                        destination.string()}),
-                0, "index command should succeed");
+        const auto index =
+                invoke_captured({"snowseek", "index", source.string(),
+                                 "--index", destination.string()});
+        snowseek::test::require_equal(index.status, 0,
+                                      "index command should succeed");
+        for (const char *key :
+             {"memory_metadata_bytes=", "memory_reader_peak_bytes=",
+              "memory_token_peak_bytes=", "memory_dictionary_bytes=",
+              "memory_posting_bytes=", "memory_estimated_peak_bytes="}) {
+                snowseek::test::require(
+                        index.output.find(key) != std::string::npos,
+                        "index output should expose " + std::string(key));
+        }
         snowseek::test::require(
                 std::filesystem::exists(destination /
                                         snowseek::storage::kSegmentFileName),
@@ -143,9 +153,9 @@ void renders_query_output_modes() {
                                 std::string::npos,
                 "JSONL should expose stable fields and explanation");
 
-        const auto paths = invoke_captured(
-                {"snowseek", "query", destination.string(), "timeout",
-                 "--paths-only"});
+        const auto paths =
+                invoke_captured({"snowseek", "query", destination.string(),
+                                 "timeout", "--paths-only"});
         snowseek::test::require_equal(paths.status, 0,
                                       "paths-only query should succeed");
         snowseek::test::require_equal(paths.output,
@@ -166,8 +176,7 @@ void reports_cli_failures() {
                         destination.string()}),
                 2, "partial index command should return two");
         snowseek::test::require_equal(
-                invoke({"snowseek", "query", destination.string(),
-                        "one two"}),
+                invoke({"snowseek", "query", destination.string(), "one two"}),
                 1, "implicit AND should fail");
         snowseek::test::require_equal(
                 invoke({"snowseek", "query", destination.string(), "safe",

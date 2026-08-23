@@ -51,6 +51,15 @@ class DocumentStore {
          */
         [[nodiscard]] const std::vector<DocumentMeta> &all() const noexcept;
 
+        /**
+         * @brief Estimates dynamic storage retained by document metadata.
+         * @return Conservative capacity-based bytes for the document vector and
+         * path character storage.
+         * @throws std::overflow_error If the estimate exceeds std::uint64_t.
+         * @note Allocator metadata and runtime-library overhead are excluded.
+         */
+        [[nodiscard]] std::uint64_t estimated_memory_bytes() const;
+
       private:
         std::vector<DocumentMeta> documents_;
 };
