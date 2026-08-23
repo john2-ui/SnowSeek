@@ -23,7 +23,9 @@ add_library(snowseek_core
     src/index/index.cpp
     src/index/index_builder.cpp
     src/query/posting_operations.cpp
+    src/query/query_parser.cpp
     src/query/query_engine.cpp
+    src/ranking/bm25.cpp
     src/storage/binary_codec.cpp
     src/storage/checksum.cpp
     src/storage/index_header.cpp

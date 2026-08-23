@@ -7,11 +7,20 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
+
+struct InvocationResult {
+        int status{};
+        std::string output;
+        std::string error;
+};
 
 class TemporaryDirectory {
       public:
@@ -51,6 +60,22 @@ int invoke(std::vector<std::string> arguments) {
                                   pointers.data());
 }
 
+/**
+ * @brief Invokes the CLI while capturing standard output and error.
+ * @param arguments Writable command-line strings.
+ * @return Exit status and captured streams.
+ */
+InvocationResult invoke_captured(std::vector<std::string> arguments) {
+        std::ostringstream output;
+        std::ostringstream error;
+        auto *old_output = std::cout.rdbuf(output.rdbuf());
+        auto *old_error = std::cerr.rdbuf(error.rdbuf());
+        const int status = invoke(std::move(arguments));
+        std::cout.rdbuf(old_output);
+        std::cerr.rdbuf(old_error);
+        return InvocationResult{status, output.str(), error.str()};
+}
+
 /** @brief Writes a CLI corpus fixture. */
 void write_file(const std::filesystem::path &path, const std::string &contents) {
         std::ofstream output(path, std::ios::binary);
@@ -60,7 +85,7 @@ void write_file(const std::filesystem::path &path, const std::string &contents) 
         }
 }
 
-/** @brief Verifies all M2 commands complete against one persisted index. */
+/** @brief Verifies index, rich query, stats, and verify commands. */
 void runs_index_query_stats_and_verify() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
@@ -76,16 +101,56 @@ void runs_index_query_stats_and_verify() {
                 std::filesystem::exists(destination /
                                         snowseek::storage::kSegmentFileName),
                 "index command should publish the Segment");
-        snowseek::test::require_equal(
-                invoke({"snowseek", "query", destination.string(),
-                        "timeout"}),
-                0, "query command should succeed");
+        const auto query = invoke_captured(
+                {"snowseek", "query", destination.string(), "timeout",
+                 "--source", source.string(), "--explain"});
+        snowseek::test::require_equal(query.status, 0,
+                                      "query command should succeed");
+        snowseek::test::require(
+                query.output.find("a.txt:1 score=") != std::string::npos &&
+                        query.output.find("timeout tf=") != std::string::npos,
+                "rich text should include snippet location and explanation");
         snowseek::test::require_equal(
                 invoke({"snowseek", "stats", destination.string()}), 0,
                 "stats command should succeed");
         snowseek::test::require_equal(
                 invoke({"snowseek", "verify", destination.string()}), 0,
                 "verify command should succeed");
+}
+
+/** @brief Verifies JSONL and paths-only presentation modes. */
+void renders_query_output_modes() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a\"quote.txt", "timeout retry");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "index", source.string(), "--index",
+                        destination.string()}),
+                0, "index fixture should build");
+
+        const auto json = invoke_captured(
+                {"snowseek", "query", destination.string(), "timeout",
+                 "--source", source.string(), "--jsonl", "--explain"});
+        snowseek::test::require_equal(json.status, 0,
+                                      "JSONL query should succeed");
+        snowseek::test::require(
+                json.output.find(
+                        "{\"path\":\"a\\\"quote.txt\",\"line\":1,\"score\":") ==
+                                0 &&
+                        json.output.find("\"explanation\":[{") !=
+                                std::string::npos,
+                "JSONL should expose stable fields and explanation");
+
+        const auto paths = invoke_captured(
+                {"snowseek", "query", destination.string(), "timeout",
+                 "--paths-only"});
+        snowseek::test::require_equal(paths.status, 0,
+                                      "paths-only query should succeed");
+        snowseek::test::require_equal(paths.output,
+                                      std::string("a\"quote.txt\n"),
+                                      "paths-only output should remain stable");
 }
 
 /** @brief Verifies invalid syntax and partial indexes return nonzero status. */
@@ -102,19 +167,32 @@ void reports_cli_failures() {
                 2, "partial index command should return two");
         snowseek::test::require_equal(
                 invoke({"snowseek", "query", destination.string(),
-                        "one OR two"}),
-                1, "unsupported query grammar should fail");
+                        "one two"}),
+                1, "implicit AND should fail");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "query", destination.string(), "safe",
+                        "--jsonl", "--paths-only"}),
+                1, "conflicting output modes should fail");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "query", destination.string(), "safe",
+                        "--paths-only", "--explain"}),
+                1, "paths-only explanation should fail");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "query", destination.string(), "safe",
+                        "--top-k", "1001"}),
+                1, "Top-K above the limit should fail");
         snowseek::test::require_equal(invoke({"snowseek", "unknown"}), 1,
                                       "unknown commands should fail");
 }
 
 } // namespace
 
-/** @brief Runs the M2 CLI integration-test suite. */
+/** @brief Runs the M3 CLI integration-test suite. */
 int main() {
         return snowseek::test::run({
                 {"runs index, query, stats, and verify",
                  runs_index_query_stats_and_verify},
+                {"renders query output modes", renders_query_output_modes},
                 {"reports CLI failures", reports_cli_failures},
         });
 }

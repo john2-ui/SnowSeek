@@ -6,12 +6,13 @@ SnowSeek 按依赖方向拆分为 `filesystem/document/analysis`、`index/storag
 
 ```text
 CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Storage
-      └── QueryEngine ── Tokenizer + Posting intersection
+      └── QueryEngine ── Parser + Boolean/Phrase evaluator ── BM25 + Top-K
+                                                   └───────── Source snippets
 ```
 
-磁盘 Segment 只追加且不可变。Manifest 是已提交 Segment 的唯一发布入口，查询端
-只读取 Manifest 可见的数据。所有跨平台磁盘数据使用固定宽度整数和显式字节序。
-首版 Segment 的精确布局和兼容性规则见 [index-format.md](index-format.md)。
+当前磁盘索引由单个不可变 Segment 构成；Manifest 和多 Segment 发布入口留到 M5。
+所有跨平台磁盘数据使用固定宽度整数和显式字节序。首版 Segment 的精确布局和
+兼容性规则见 [index-format.md](index-format.md)。
 
 `document::TextReader` 使用固定大小缓冲区读取原文，并通过回调输出不跨越 UTF-8
 字符边界的文本块。非法 UTF-8 默认替换为 U+FFFD，也可使用严格模式在首个错误的
@@ -30,12 +31,13 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 提交 Posting，避免读取或分析失败留下半个文档。文档修改时间统一记录为 Unix Epoch
 纳秒。
 
-`query::InMemoryQueryEngine` 以只读引用绑定文档表和内存索引，用与建索引
-一致的 Tokenizer 规范化单词查询。两词 AND 查询使用双指针线性求交，结果
-仅按 DocumentId 升序返回。该内存查询层不依赖面向磁盘索引的 `QueryEngine`，
-当前不包含相关性排序、Top-K 或查询表达式解析。
-
 M2 使用单个不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
 Header 与每个区域分别使用 CRC32C 校验，所有整数显式使用小端编码；加载器在构造
 查询结构前验证版本、边界、顺序、计数与校验和。`IndexBuilder` 写入同目录临时文件
-并自校验后发布，`QueryEngine` 重新加载 Segment 后支持单词及两词 AND 查询。
+并自校验后发布。
+
+M3 的 `query::parse_query` 将表达式解析为有深度上限的 AST，`QueryEngine` 对有序
+DocumentId 集合执行布尔运算，短语命中额外验证连续 Position。AND 子树按估算文档
+频率从小到大求交；匹配文档按正向去重词项的 BM25 之和评分，通过固定容量堆保留
+Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 v1 索引，调用方可显式提供
+`source_root`，引擎只为最终 Top-K 读取原文并生成 UTF-8 行片段。

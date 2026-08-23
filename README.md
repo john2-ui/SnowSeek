@@ -1,7 +1,7 @@
 # SnowSeek
 
 SnowSeek 是一个面向嵌入式 Linux 的零第三方运行依赖本地全文检索引擎，使用
-C++20 实现。项目目前处于框架搭建阶段。
+C++20 实现。项目当前已完成 M3 查询与排序闭环。
 
 ## 构建
 
@@ -16,14 +16,22 @@ cmake --build build
 
 ```bash
 ./build/snowseek index ./testdata --index ./snowseek-index
-./build/snowseek query ./snowseek-index timeout
-./build/snowseek query ./snowseek-index "timeout AND retry"
+./build/snowseek query ./snowseek-index timeout --source ./testdata
+./build/snowseek query ./snowseek-index '"timeout retry"' --source ./testdata
+./build/snowseek query ./snowseek-index \
+  '(timeout OR retry) AND extension:txt' --top-k 10 --jsonl --explain
 ./build/snowseek stats ./snowseek-index
 ./build/snowseek verify ./snowseek-index
 ```
 
 索引写入 `segment-0000000000000001.idx`，保存相对源目录的文档路径。若个别文件
 无法读取或分析，成功文档仍会发布，但 `index` 返回状态码 2 并输出诊断。
+
+查询表达式支持括号、大小写不敏感的 `AND`、`OR`、`NOT`、双引号精确短语、
+`path:` Glob 和 `extension:` 精确扩展名过滤。相邻词项不会隐式连接，必须显式写
+`AND`。默认输出相对路径、BM25 分数以及可用的原文行号和片段；`--source <dir>`
+指定原语料根目录，`--paths-only` 保留每行一个路径的输出，`--jsonl` 输出结构化
+结果，`--explain` 增加逐词评分贡献。默认 Top-K 为 20，上限为 1000。
 
 测试不依赖第三方框架，并且在 Debug 和 Release 构建中都会执行显式检查。若需要将
 编译器警告视为错误，可在配置时增加 `-DSNOWSEEK_WARNINGS_AS_ERRORS=ON`。
