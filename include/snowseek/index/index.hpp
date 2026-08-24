@@ -34,6 +34,13 @@ struct InMemoryIndexMemoryUsage {
 
 class InMemoryIndex {
       public:
+        InMemoryIndex() = default;
+
+        InMemoryIndex(const InMemoryIndex &) = delete;
+        InMemoryIndex &operator=(const InMemoryIndex &) = delete;
+        InMemoryIndex(InMemoryIndex &&) noexcept = default;
+        InMemoryIndex &operator=(InMemoryIndex &&) noexcept = default;
+
         /**
          * @brief Adds one ordered occurrence to a term's posting list.
          * @param term Nonempty normalized term to index.
@@ -43,7 +50,8 @@ class InMemoryIndex {
          * posting must be strictly increasing.
          * @throws std::invalid_argument If the term is empty or ordering is
          * invalid.
-         * @throws std::overflow_error If term frequency exceeds std::uint32_t.
+         * @throws std::overflow_error If term frequency or the retained-memory
+         * estimate exceeds its supported range.
          */
         void add_occurrence(std::string_view term,
                             document::DocumentId document_id,
@@ -69,13 +77,13 @@ class InMemoryIndex {
         /**
          * @brief Estimates dynamic storage retained by the in-memory index.
          * @return Conservative capacity-based dictionary and posting bytes.
-         * @throws std::overflow_error If either estimate exceeds std::uint64_t.
          * @note Allocator metadata and runtime-library overhead are excluded.
          */
         [[nodiscard]] InMemoryIndexMemoryUsage estimated_memory_usage() const;
 
       private:
         std::unordered_map<std::string, PostingList> dictionary_;
+        InMemoryIndexMemoryUsage memory_usage_;
 };
 
 } // namespace snowseek::index

@@ -33,8 +33,7 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
 
 M2 使用单个不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
 Header 与每个区域分别使用 CRC32C 校验，所有整数显式使用小端编码；加载器在构造
-查询结构前验证版本、边界、顺序、计数与校验和。`IndexBuilder` 写入同目录临时文件
-并自校验后发布。
+查询结构前验证版本、边界、顺序、计数与校验和。查询仍只读取一个最终 Segment。
 
 M3 的 `query::parse_query` 将表达式解析为有深度上限的 AST，`QueryEngine` 对有序
 DocumentId 集合执行布尔运算，短语命中额外验证连续 Position。AND 子树按估算文档
@@ -42,9 +41,13 @@ DocumentId 集合执行布尔运算，短语命中额外验证连续 Position。
 Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 v1 索引，调用方可显式提供
 `source_root`，引擎只为最终 Top-K 读取原文并生成 UTF-8 行片段。
 
-M4 的第一步为当前全内存构建增加容量驱动的观测统计。`DocumentStore` 按文档数组
-capacity 和路径字符串 capacity 估算文档表；`InMemoryIndex` 按哈希桶、词典节点、
-词项字符串、Posting 与 Position 数组 capacity 分类估算。构建器另行记录扫描路径、
-诊断、`TextReader` 缓冲区和单文档 Token 临时存储，并对持久化自校验期间同时驻留的
-索引计入保守合计。这些估算不包含 allocator 元数据、运行库和内核页，也不负责限制
-内存。Linux 基准使用 `getrusage(RUSAGE_SELF)` 独立记录进程峰值 RSS 进行校准。
+M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算。持久化构建在
+`DocumentStore + dictionary + postings` 达到默认 128 MiB 后，于文档边界将当前批次
+写为私有工作区内的 v1 Segment；单个超大文档允许越过阈值一次。临时 Segment 使用
+局部 DocumentId，最终归并按批次基址重映射为全局连续 ID。
+
+多 Segment 归并为词典建立一个最小堆游标。第一遍统计唯一词数，第二遍依次写 term
+记录、term 字节、Postings 和 Positions spool，再用固定缓冲拼装最终 v1 文件并增量
+计算 CRC32C。候选文件通过流式边界、顺序、计数和校验和验证后才替换稳定文件；查询
+加载格式没有变化。容量估算不包含 allocator、运行库和内核页，也不是 RSS 硬限制；
+Linux 基准继续使用 `getrusage(RUSAGE_SELF)` 独立校准。

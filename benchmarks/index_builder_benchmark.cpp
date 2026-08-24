@@ -5,12 +5,14 @@
 
 #include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iomanip>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -260,6 +262,11 @@ int run(const BenchmarkOptions &options) {
                   << "throughput_mib_per_second=" << std::fixed
                   << std::setprecision(3) << throughput << '\n'
                   << "index_bytes=" << index_bytes << '\n'
+                  << "segment_flush_threshold_bytes="
+                  << snowseek::index::kDefaultSegmentFlushThresholdBytes
+                  << '\n'
+                  << "temporary_segment_count="
+                  << result.temporary_segment_count << '\n'
                   << "memory_metadata_bytes="
                   << result.stats.memory.metadata_bytes << '\n'
                   << "memory_reader_peak_bytes="

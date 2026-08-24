@@ -2,11 +2,13 @@
 
 #include "snowseek/common/checked_arithmetic.hpp"
 #include "snowseek/storage/index_file.hpp"
+#include "storage/segment_merge.hpp"
 
 #include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <limits>
 #include <optional>
 #include <stdexcept>
@@ -92,6 +94,41 @@ struct ParsedDocument {
 
 using common::detail::checked_add;
 using common::detail::checked_multiply;
+
+class BuildWorkspace {
+      public:
+        /**
+         * @brief Creates a unique private build directory below a destination.
+         * @param parent Existing index directory that owns the workspace.
+         * @throws std::system_error If Linux cannot create the workspace.
+         */
+        explicit BuildWorkspace(const std::filesystem::path &parent) {
+                auto pattern = (parent / ".snowseek-build-XXXXXX").string();
+                if (::mkdtemp(pattern.data()) == nullptr) {
+                        throw std::system_error(
+                                errno, std::generic_category(),
+                                "failed to create build workspace");
+                }
+                path_ = std::move(pattern);
+        }
+
+        BuildWorkspace(const BuildWorkspace &) = delete;
+        BuildWorkspace &operator=(const BuildWorkspace &) = delete;
+
+        /** @brief Removes all unpublished files owned by this build. */
+        ~BuildWorkspace() {
+                std::error_code ignored;
+                std::filesystem::remove_all(path_, ignored);
+        }
+
+        /** @brief Returns the private directory owned by this object. */
+        [[nodiscard]] const std::filesystem::path &path() const noexcept {
+                return path_;
+        }
+
+      private:
+        std::filesystem::path path_;
+};
 
 /**
  * @brief Estimates peak dynamic buffers used by one TextReader invocation.
@@ -208,6 +245,24 @@ estimated_build_error_bytes(const std::vector<BuildError> &errors) {
 }
 
 /**
+ * @brief Estimates retained temporary Segment descriptor storage.
+ * @param segments Segment paths and logical statistics retained for merging.
+ * @return Vector capacity and path character bytes.
+ * @throws std::overflow_error If the estimate exceeds std::uint64_t.
+ */
+[[nodiscard]] std::uint64_t estimated_segment_source_bytes(
+        const std::vector<storage::detail::SegmentSource> &segments) {
+        auto bytes = checked_multiply(
+                segments.capacity(),
+                sizeof(storage::detail::SegmentSource), "Segment sources");
+        for (const auto &segment : segments) {
+                bytes = checked_add(bytes, estimated_path_bytes(segment.path),
+                                    "Segment sources");
+        }
+        return bytes;
+}
+
+/**
  * @brief Recomputes the conservative sum of all classified memory estimates.
  * @param memory Memory categories whose total is updated.
  * @throws std::overflow_error If their sum exceeds std::uint64_t.
@@ -306,41 +361,43 @@ parse_document(const std::filesystem::path &path,
  * @brief Commits a fully parsed document to the document table and index.
  * @param path Source path stored in the document metadata.
  * @param parsed Complete parsed state transferred into the build result.
- * @param result Build result updated with metadata, postings, and statistics.
+ * @param documents Document table receiving the committed metadata.
+ * @param index Inverted index receiving the committed occurrences.
+ * @param stats Aggregate statistics updated after a complete commit.
  * @throws std::overflow_error If a statistic, identifier, or frequency exceeds
  * its supported range.
  * @throws std::invalid_argument If parsed posting order violates index
  * invariants.
  */
 void commit_document(const std::filesystem::path &path, ParsedDocument parsed,
-                     InMemoryBuildResult &result) {
+                     document::DocumentStore &documents, InMemoryIndex &index,
+                     InMemoryBuildStats &stats) {
         // Validate all aggregate counters before publishing the document.
         const auto indexed_files =
-                checked_add(result.stats.indexed_files, 1, "indexed_files");
+                checked_add(stats.indexed_files, 1, "indexed_files");
         const auto indexed_bytes =
-                checked_add(result.stats.indexed_bytes,
+                checked_add(stats.indexed_bytes,
                             parsed.read_stats.bytes_read, "indexed_bytes");
         const auto token_count =
-                checked_add(result.stats.token_count,
+                checked_add(stats.token_count,
                             static_cast<std::uint64_t>(parsed.tokens.size()),
                             "token_count");
 
         // Assign the stable document ID before adding its ordered postings.
         const auto document_id =
-                result.documents.add(path, parsed.metadata.file_size,
-                                     parsed.metadata.modified_time_ns);
+                documents.add(path, parsed.metadata.file_size,
+                              parsed.metadata.modified_time_ns);
 
         for (const auto &token : parsed.tokens) {
-                result.index.add_occurrence(token.term, document_id,
-                                            token.position);
+                index.add_occurrence(token.term, document_id, token.position);
         }
-        result.documents.set_token_count(
+        documents.set_token_count(
                 document_id, static_cast<std::uint32_t>(parsed.tokens.size()));
 
         // Publish statistics only after metadata and postings are committed.
-        result.stats.indexed_files = indexed_files;
-        result.stats.indexed_bytes = indexed_bytes;
-        result.stats.token_count = token_count;
+        stats.indexed_files = indexed_files;
+        stats.indexed_bytes = indexed_bytes;
+        stats.token_count = token_count;
 }
 
 } // namespace
@@ -385,10 +442,21 @@ InMemoryIndexBuilder::build(const std::filesystem::path &source) const {
                 }
 
                 // Only a completely parsed file crosses the commit boundary.
-                commit_document(path, std::move(*parsed), result);
+                commit_document(path, std::move(*parsed), result.documents,
+                                result.index, result.stats);
         }
         finalize_memory_stats(scan_result.files, result);
         return result;
+}
+
+IndexBuilder::IndexBuilder(PersistentBuildOptions options)
+    : options_(std::move(options)) {
+        if (options_.segment_flush_threshold_bytes == 0) {
+                throw std::invalid_argument(
+                        "segment flush threshold must be positive");
+        }
+        static_cast<void>(
+                InMemoryIndexBuilder(options_.in_memory_options));
 }
 
 PersistentBuildResult
@@ -399,71 +467,135 @@ IndexBuilder::build(const std::filesystem::path &source,
                                          source.string());
         }
 
-        // Build the complete logical snapshot before creating any destination
-        // file, preserving per-document failure isolation.
         const auto canonical_source = std::filesystem::weakly_canonical(source);
-        auto in_memory = InMemoryIndexBuilder{}.build(canonical_source);
+        const filesystem::Scanner scanner(
+                options_.in_memory_options.scan_options);
+        auto scan_result = scanner.scan(canonical_source);
+        std::filesystem::create_directories(index_directory);
+        BuildWorkspace workspace(index_directory);
+        PersistentBuildResult result;
+        result.stats.scanned_files = scan_result.files.size();
+        result.scan_errors = std::move(scan_result.errors);
 
-        // Persist source-relative paths so the index directory can be moved
-        // without embedding machine-specific absolute corpus roots.
-        document::DocumentStore relative_documents;
-        for (const auto &document : in_memory.documents.all()) {
-                const auto relative =
-                        document.path.lexically_relative(canonical_source);
+        document::DocumentStore batch_documents;
+        InMemoryIndex batch_index;
+        std::vector<storage::detail::SegmentSource> segments;
+        std::uint64_t peak_batch_document_bytes = 0;
+
+        /** Flushes one complete document batch into the private workspace. */
+        const auto flush_batch = [&]() {
+                if (batch_documents.size() == 0) {
+                        return;
+                }
+                const auto path = workspace.path() /
+                                  ("segment-" +
+                                   std::to_string(segments.size()) + ".idx");
+                const auto stats = storage::write_index_file(
+                        path, batch_documents, batch_index);
+                segments.push_back(storage::detail::SegmentSource{path,
+                                                                  stats});
+                batch_documents = {};
+                batch_index = {};
+        };
+
+        // Parse each file transactionally and flush only at document borders.
+        const document::TextReader reader(
+                options_.in_memory_options.read_options);
+        for (const auto &path : scan_result.files) {
+                std::optional<ParsedDocument> parsed;
+                try {
+                        parsed.emplace(parse_document(
+                                path, reader,
+                                options_.in_memory_options.read_options,
+                                options_.in_memory_options.tokenizer_options,
+                                result.stats.memory));
+                } catch (const std::length_error &error) {
+                        result.document_errors.push_back(
+                                BuildError{path, error.what()});
+                        result.stats.failed_files = checked_add(
+                                result.stats.failed_files, 1, "failed_files");
+                        continue;
+                } catch (const std::runtime_error &error) {
+                        result.document_errors.push_back(
+                                BuildError{path, error.what()});
+                        result.stats.failed_files = checked_add(
+                                result.stats.failed_files, 1, "failed_files");
+                        continue;
+                }
+
+                const auto relative = path.lexically_relative(canonical_source);
                 if (relative.empty() || relative.is_absolute()) {
                         throw std::runtime_error("indexed document is outside "
                                                  "the source root: " +
-                                                 document.path.string());
+                                                 path.string());
                 }
-                const auto id =
-                        relative_documents.add(relative, document.file_size,
-                                               document.modified_time_ns);
-                relative_documents.set_token_count(id, document.token_count);
+                commit_document(relative, std::move(*parsed), batch_documents,
+                                batch_index, result.stats);
+                const auto document_bytes =
+                        batch_documents.estimated_memory_bytes();
+                peak_batch_document_bytes =
+                        std::max(peak_batch_document_bytes, document_bytes);
+                const auto index_memory =
+                        batch_index.estimated_memory_usage();
+                result.stats.memory.dictionary_bytes = std::max(
+                        result.stats.memory.dictionary_bytes,
+                        index_memory.dictionary_bytes);
+                result.stats.memory.posting_bytes = std::max(
+                        result.stats.memory.posting_bytes,
+                        index_memory.posting_bytes);
+                auto retained = checked_add(
+                        document_bytes, index_memory.dictionary_bytes,
+                        "active Segment memory");
+                retained = checked_add(retained, index_memory.posting_bytes,
+                                       "active Segment memory");
+                if (retained >= options_.segment_flush_threshold_bytes) {
+                        flush_batch();
+                }
         }
-        in_memory.stats.memory.metadata_bytes =
-                checked_add(in_memory.stats.memory.metadata_bytes,
-                            relative_documents.estimated_memory_bytes(),
-                            "persistent metadata memory");
-        update_estimated_peak(in_memory.stats.memory);
+        flush_batch();
+        result.temporary_segment_count = segments.size();
 
-        std::filesystem::create_directories(index_directory);
         const auto index_file = index_directory / storage::kSegmentFileName;
-        const auto temporary_file = index_file.string() + ".tmp";
-
-        // Write and fully re-read the temporary Segment before replacing the
-        // visible v1 file. Durability fsync and crash recovery remain M5 work.
-        static_cast<void>(storage::write_index_file(
-                temporary_file, relative_documents, in_memory.index));
-        {
-                const auto verified = storage::read_index_file(temporary_file);
-                const auto verified_index =
-                        verified.index.estimated_memory_usage();
-                in_memory.stats.memory.metadata_bytes =
-                        checked_add(in_memory.stats.memory.metadata_bytes,
-                                    verified.documents.estimated_memory_bytes(),
-                                    "verification metadata memory");
-                in_memory.stats.memory.dictionary_bytes =
-                        checked_add(in_memory.stats.memory.dictionary_bytes,
-                                    verified_index.dictionary_bytes,
-                                    "verification dictionary memory");
-                in_memory.stats.memory.posting_bytes =
-                        checked_add(in_memory.stats.memory.posting_bytes,
-                                    verified_index.posting_bytes,
-                                    "verification posting memory");
-                update_estimated_peak(in_memory.stats.memory);
+        const auto candidate = workspace.path() / "candidate.idx";
+        std::uint64_t merge_memory = 0;
+        if (segments.empty()) {
+                static_cast<void>(storage::write_index_file(
+                        candidate, document::DocumentStore{},
+                        InMemoryIndex{}));
+        } else if (segments.size() == 1) {
+                std::filesystem::rename(segments.front().path, candidate);
+        } else {
+                merge_memory = storage::detail::merge_index_files(candidate,
+                                                                  segments);
         }
+        static_cast<void>(storage::validate_index_file(candidate));
+
+        auto metadata = estimated_path_list_bytes(scan_result.files);
+        metadata = checked_add(metadata,
+                               estimated_scan_error_bytes(result.scan_errors),
+                               "metadata memory");
+        metadata = checked_add(
+                metadata,
+                estimated_build_error_bytes(result.document_errors),
+                "metadata memory");
+        metadata = checked_add(metadata,
+                               estimated_segment_source_bytes(segments),
+                               "metadata memory");
+        result.stats.memory.metadata_bytes = checked_add(
+                metadata, std::max(peak_batch_document_bytes, merge_memory),
+                "metadata memory");
+        update_estimated_peak(result.stats.memory);
+
+        // Publish only the fully validated candidate; the workspace owns every
+        // other artifact and removes it on both success and failure.
         std::error_code rename_error;
-        std::filesystem::rename(temporary_file, index_file, rename_error);
+        std::filesystem::rename(candidate, index_file, rename_error);
         if (rename_error) {
-                std::error_code remove_error;
-                std::filesystem::remove(temporary_file, remove_error);
                 throw std::runtime_error("failed to publish index file: " +
                                          rename_error.message());
         }
-
-        return PersistentBuildResult{index_file, in_memory.stats,
-                                     std::move(in_memory.scan_errors),
-                                     std::move(in_memory.document_errors)};
+        result.index_file = index_file;
+        return result;
 }
 
 } // namespace snowseek::index

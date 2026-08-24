@@ -89,6 +89,7 @@ void round_trips_complete_index() {
         snowseek::test::require_equal(read_bytes(first), read_bytes(second),
                                       "serialization should be deterministic");
         const auto loaded = snowseek::storage::read_index_file(first);
+        const auto validated = snowseek::storage::validate_index_file(first);
         snowseek::test::require_equal(loaded.documents.size(), std::size_t{2},
                                       "both documents should reload");
         snowseek::test::require_equal(loaded.documents.get(0).path,
@@ -116,6 +117,12 @@ void round_trips_complete_index() {
                                       "posting statistics should match");
         snowseek::test::require_equal(stats.position_count, std::uint64_t{4},
                                       "position statistics should match");
+        snowseek::test::require_equal(
+                validated.file_size, stats.file_size,
+                "streaming validation should report the serialized size");
+        snowseek::test::require_equal(
+                validated.position_count, stats.position_count,
+                "streaming validation should report logical positions");
 }
 
 /** @brief Verifies paths outside valid UTF-8 cannot enter the portable format. */
@@ -160,6 +167,13 @@ void rejects_corrupted_or_truncated_files() {
                                 corrupted_path));
                 },
                 "section corruption should be rejected");
+        snowseek::test::require_throws<std::runtime_error>(
+                [&corrupted_path] {
+                        static_cast<void>(
+                                snowseek::storage::validate_index_file(
+                                        corrupted_path));
+                },
+                "streaming validation should reject section corruption");
 
         const auto truncated_path = temporary.path() / "truncated.idx";
         write_bytes(truncated_path,
@@ -170,6 +184,13 @@ void rejects_corrupted_or_truncated_files() {
                                 truncated_path));
                 },
                 "truncated files should be rejected");
+        snowseek::test::require_throws<std::runtime_error>(
+                [&truncated_path] {
+                        static_cast<void>(
+                                snowseek::storage::validate_index_file(
+                                        truncated_path));
+                },
+                "streaming validation should reject truncation");
 }
 
 } // namespace

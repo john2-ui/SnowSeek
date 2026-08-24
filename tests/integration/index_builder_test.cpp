@@ -1,4 +1,5 @@
 #include "snowseek/index/index_builder.hpp"
+#include "snowseek/storage/index_file.hpp"
 
 #include "test_support.hpp"
 
@@ -6,6 +7,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -66,6 +69,16 @@ void write_file(const std::filesystem::path &path, std::string_view contents) {
         if (!output) {
                 throw std::runtime_error("failed to write builder test file");
         }
+}
+
+/**
+ * @brief Reads a complete Segment fixture for deterministic comparison.
+ * @param path Existing Segment path.
+ * @return Complete binary contents.
+ */
+[[nodiscard]] std::string read_file(const std::filesystem::path &path) {
+        std::ifstream input(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), {});
 }
 
 /** @brief Verifies end-to-end document and posting construction. */
@@ -361,6 +374,137 @@ void counts_failed_document_buffers() {
                 "failed documents should not allocate postings");
 }
 
+/** @brief Verifies positive persistent Segment flush configuration. */
+void rejects_zero_segment_flush_threshold() {
+        snowseek::index::PersistentBuildOptions options;
+        options.segment_flush_threshold_bytes = 0;
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(snowseek::index::IndexBuilder(options));
+                },
+                "a zero flush threshold should be rejected");
+}
+
+/** @brief Verifies multi-Segment output matches a single-batch build. */
+void merges_flushed_segments_byte_for_byte() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto single_directory = temporary.path() / "single";
+        const auto merged_directory = temporary.path() / "merged";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha shared alpha");
+        write_file(source / "b.txt", "beta shared");
+        write_file(source / "c.txt", "gamma shared gamma");
+
+        snowseek::index::PersistentBuildOptions single_options;
+        single_options.segment_flush_threshold_bytes =
+                std::numeric_limits<std::uint64_t>::max();
+        const auto single =
+                snowseek::index::IndexBuilder(single_options)
+                        .build(source, single_directory);
+
+        snowseek::index::PersistentBuildOptions merged_options;
+        merged_options.segment_flush_threshold_bytes = 1;
+        const auto merged =
+                snowseek::index::IndexBuilder(merged_options)
+                        .build(source, merged_directory);
+
+        snowseek::test::require_equal(
+                single.temporary_segment_count, std::uint64_t{1},
+                "an unlimited threshold should create one temporary Segment");
+        snowseek::test::require_equal(
+                merged.temporary_segment_count, std::uint64_t{3},
+                "a one-byte threshold should flush every document");
+        snowseek::test::require_equal(
+                read_file(single.index_file), read_file(merged.index_file),
+                "K-way merge should reproduce single-batch v1 bytes");
+        const auto loaded =
+                snowseek::storage::read_index_file(merged.index_file);
+        const auto *shared = loaded.index.find("shared");
+        snowseek::test::require(shared != nullptr && shared->size() == 3,
+                                "a shared term should merge all documents");
+        snowseek::test::require_equal(
+                (*shared)[2].document_id,
+                snowseek::document::DocumentId{2},
+                "later Segment document IDs should be remapped globally");
+
+        std::size_t published_entries = 0;
+        for (const auto &entry :
+             std::filesystem::directory_iterator(merged_directory)) {
+                static_cast<void>(entry);
+                ++published_entries;
+        }
+        snowseek::test::require_equal(
+                published_entries, std::size_t{1},
+                "successful publication should clean every workspace file");
+}
+
+/** @brief Verifies empty and one-document persistent builds. */
+void handles_empty_and_oversized_batches() {
+        const TemporaryDirectory temporary;
+        const auto empty_source = temporary.path() / "empty-source";
+        const auto one_source = temporary.path() / "one-source";
+        std::filesystem::create_directory(empty_source);
+        std::filesystem::create_directory(one_source);
+        write_file(one_source / "large.txt", "one two three four five");
+
+        snowseek::index::PersistentBuildOptions options;
+        options.segment_flush_threshold_bytes = 1;
+        const auto empty = snowseek::index::IndexBuilder(options).build(
+                empty_source, temporary.path() / "empty-index");
+        const auto one = snowseek::index::IndexBuilder(options).build(
+                one_source, temporary.path() / "one-index");
+
+        snowseek::test::require_equal(
+                empty.temporary_segment_count, std::uint64_t{0},
+                "an empty corpus should not create temporary Segments");
+        snowseek::test::require_equal(
+                snowseek::storage::validate_index_file(empty.index_file)
+                        .document_count,
+                std::uint64_t{0}, "an empty corpus should publish a valid index");
+        snowseek::test::require_equal(
+                one.temporary_segment_count, std::uint64_t{1},
+                "one oversized document should flush after its complete commit");
+        snowseek::test::require_equal(
+                snowseek::storage::validate_index_file(one.index_file)
+                        .document_count,
+                std::uint64_t{1},
+                "one oversized document should remain queryable");
+}
+
+/** @brief Verifies failed publication preserves the target and cleans work. */
+void cleans_workspace_after_publication_failure() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        const auto published = destination /
+                               snowseek::storage::kSegmentFileName;
+        std::filesystem::create_directory(source);
+        std::filesystem::create_directory(destination);
+        std::filesystem::create_directory(published);
+        write_file(source / "a.txt", "alpha");
+        write_file(published / "sentinel", "old target");
+
+        snowseek::test::require_throws<std::runtime_error>(
+                [&source, &destination] {
+                        static_cast<void>(snowseek::index::IndexBuilder{}.build(
+                                source, destination));
+                },
+                "an unreplaceable published target should fail");
+        snowseek::test::require(
+                std::filesystem::exists(published / "sentinel"),
+                "a failed publish should preserve the existing target");
+        std::size_t entries = 0;
+        for (const auto &entry :
+             std::filesystem::directory_iterator(destination)) {
+                static_cast<void>(entry);
+                ++entries;
+        }
+        snowseek::test::require_equal(
+                entries, std::size_t{1},
+                "a failed publish should remove its private workspace");
+}
+
 } // namespace
 
 /** @brief Runs the in-memory-index-builder integration-test suite. */
@@ -381,5 +525,13 @@ int main() {
                  reports_zero_memory_for_an_empty_corpus},
                 {"counts failed document buffers",
                  counts_failed_document_buffers},
+                {"rejects zero Segment flush threshold",
+                 rejects_zero_segment_flush_threshold},
+                {"merges flushed Segments byte for byte",
+                 merges_flushed_segments_byte_for_byte},
+                {"handles empty and oversized batches",
+                 handles_empty_and_oversized_batches},
+                {"cleans workspace after publication failure",
+                 cleans_workspace_after_publication_failure},
         });
 }

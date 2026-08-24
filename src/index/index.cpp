@@ -30,12 +30,45 @@ void InMemoryIndex::add_occurrence(std::string_view term,
                 throw std::invalid_argument("index term must not be empty");
         }
 
+        const bool was_empty = dictionary_.empty();
+        const auto old_bucket_count = dictionary_.bucket_count();
         auto [iterator, inserted] =
                 dictionary_.try_emplace(std::string(term), PostingList{});
+        const auto counted_bucket_count = was_empty ? 0 : old_bucket_count;
+        if (dictionary_.bucket_count() != counted_bucket_count) {
+                memory_usage_.dictionary_bytes = checked_add(
+                        memory_usage_.dictionary_bytes,
+                        checked_multiply(dictionary_.bucket_count() -
+                                                 counted_bucket_count,
+                                         sizeof(void *), "dictionary"),
+                        "dictionary");
+        }
+        if (inserted) {
+                memory_usage_.dictionary_bytes = checked_add(
+                        memory_usage_.dictionary_bytes,
+                        sizeof(typename decltype(dictionary_)::value_type),
+                        "dictionary");
+                memory_usage_.dictionary_bytes = checked_add(
+                        memory_usage_.dictionary_bytes,
+                        checked_multiply(iterator->first.capacity(),
+                                         sizeof(char), "dictionary term"),
+                        "dictionary");
+        }
         auto &postings = iterator->second;
 
         if (inserted || postings.empty()) {
+                const auto old_capacity = postings.capacity();
                 postings.push_back(Posting{document_id, {position}});
+                memory_usage_.posting_bytes = checked_add(
+                        memory_usage_.posting_bytes,
+                        checked_multiply(postings.capacity() - old_capacity,
+                                         sizeof(Posting), "posting list"),
+                        "posting");
+                memory_usage_.posting_bytes = checked_add(
+                        memory_usage_.posting_bytes,
+                        checked_multiply(postings.back().positions.capacity(),
+                                         sizeof(Position), "position"),
+                        "posting");
                 return;
         }
 
@@ -46,7 +79,18 @@ void InMemoryIndex::add_occurrence(std::string_view term,
         }
 
         if (document_id > last_posting.document_id) {
+                const auto old_capacity = postings.capacity();
                 postings.push_back(Posting{document_id, {position}});
+                memory_usage_.posting_bytes = checked_add(
+                        memory_usage_.posting_bytes,
+                        checked_multiply(postings.capacity() - old_capacity,
+                                         sizeof(Posting), "posting list"),
+                        "posting");
+                memory_usage_.posting_bytes = checked_add(
+                        memory_usage_.posting_bytes,
+                        checked_multiply(postings.back().positions.capacity(),
+                                         sizeof(Position), "position"),
+                        "posting");
                 return;
         }
 
@@ -59,7 +103,14 @@ void InMemoryIndex::add_occurrence(std::string_view term,
                 throw std::overflow_error(
                         "posting term frequency exceeds uint32_t");
         }
+        const auto old_capacity = last_posting.positions.capacity();
         last_posting.positions.push_back(position);
+        memory_usage_.posting_bytes = checked_add(
+                memory_usage_.posting_bytes,
+                checked_multiply(last_posting.positions.capacity() -
+                                         old_capacity,
+                                 sizeof(Position), "position"),
+                "posting");
 }
 
 const PostingList *InMemoryIndex::find(std::string_view term) const {
@@ -83,41 +134,7 @@ std::vector<std::string> InMemoryIndex::sorted_terms() const {
 }
 
 InMemoryIndexMemoryUsage InMemoryIndex::estimated_memory_usage() const {
-        if (dictionary_.empty()) {
-                return {};
-        }
-
-        InMemoryIndexMemoryUsage usage;
-        usage.dictionary_bytes = checked_multiply(dictionary_.bucket_count(),
-                                                  sizeof(void *), "dictionary");
-        usage.dictionary_bytes = checked_add(
-                usage.dictionary_bytes,
-                checked_multiply(
-                        dictionary_.size(),
-                        sizeof(typename decltype(dictionary_)::value_type),
-                        "dictionary"),
-                "dictionary");
-
-        for (const auto &[term, postings] : dictionary_) {
-                usage.dictionary_bytes = checked_add(
-                        usage.dictionary_bytes,
-                        checked_multiply(term.capacity(), sizeof(char),
-                                         "dictionary term"),
-                        "dictionary");
-                usage.posting_bytes = checked_add(
-                        usage.posting_bytes,
-                        checked_multiply(postings.capacity(), sizeof(Posting),
-                                         "posting list"),
-                        "posting");
-                for (const auto &posting : postings) {
-                        usage.posting_bytes = checked_add(
-                                usage.posting_bytes,
-                                checked_multiply(posting.positions.capacity(),
-                                                 sizeof(Position), "position"),
-                                "posting");
-                }
-        }
-        return usage;
+        return memory_usage_;
 }
 
 } // namespace snowseek::index

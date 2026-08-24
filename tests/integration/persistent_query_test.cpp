@@ -139,8 +139,13 @@ void ranks_deterministically() {
         write_file(source / "a.txt", "alpha alpha alpha");
         write_file(source / "b.txt", "alpha");
         write_file(source / "c.txt", "filter only");
-        static_cast<void>(
-                snowseek::index::IndexBuilder{}.build(source, destination));
+        snowseek::index::PersistentBuildOptions build_options;
+        build_options.segment_flush_threshold_bytes = 1;
+        const auto build = snowseek::index::IndexBuilder(build_options).build(
+                source, destination);
+        snowseek::test::require_equal(
+                build.temporary_segment_count, std::uint64_t{3},
+                "the ranking fixture should exercise K-way merge");
         const snowseek::query::QueryEngine engine(destination);
 
         snowseek::query::SearchOptions options;

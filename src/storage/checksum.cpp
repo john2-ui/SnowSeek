@@ -32,14 +32,22 @@ constexpr auto kCrc32cTable = make_crc32c_table();
 
 } // namespace
 
-std::uint32_t crc32c(std::string_view bytes) noexcept {
-        std::uint32_t state = 0xffffffffU;
+void Crc32c::update(std::string_view bytes) noexcept {
         for (const unsigned char byte : bytes) {
                 const auto table_index = static_cast<std::uint8_t>(
-                        state ^ static_cast<std::uint8_t>(byte));
-                state = kCrc32cTable[table_index] ^ (state >> 8U);
+                        state_ ^ static_cast<std::uint8_t>(byte));
+                state_ = kCrc32cTable[table_index] ^ (state_ >> 8U);
         }
-        return state ^ 0xffffffffU;
+}
+
+std::uint32_t Crc32c::value() const noexcept {
+        return state_ ^ 0xffffffffU;
+}
+
+std::uint32_t crc32c(std::string_view bytes) noexcept {
+        Crc32c checksum;
+        checksum.update(bytes);
+        return checksum.value();
 }
 
 } // namespace snowseek::storage

@@ -47,4 +47,14 @@ write_index_file(const std::filesystem::path &path,
  */
 [[nodiscard]] LoadedIndex read_index_file(const std::filesystem::path &path);
 
+/**
+ * @brief Validates a v1 Segment without constructing query-time structures.
+ * @param path Segment file to inspect using bounded streaming buffers.
+ * @return Statistics from the validated header and logical records.
+ * @throws std::runtime_error If the file is inaccessible, malformed, or
+ * corrupted.
+ */
+[[nodiscard]] IndexFileStats
+validate_index_file(const std::filesystem::path &path);
+
 } // namespace snowseek::storage

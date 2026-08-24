@@ -30,6 +30,8 @@ add_library(snowseek_core
     src/storage/checksum.cpp
     src/storage/index_header.cpp
     src/storage/index_file.cpp
+    src/storage/segment_merge.cpp
+    src/storage/index_validation.cpp
 )
 add_library(SnowSeek::core ALIAS snowseek_core)
 
@@ -38,6 +40,8 @@ target_include_directories(snowseek_core
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 snowseek_enable_warnings(snowseek_core)
 

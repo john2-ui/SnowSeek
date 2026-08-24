@@ -13,6 +13,9 @@
 
 namespace snowseek::index {
 
+inline constexpr std::uint64_t kDefaultSegmentFlushThresholdBytes =
+        128ULL * 1024ULL * 1024ULL;
+
 struct InMemoryBuildOptions {
         filesystem::ScanOptions scan_options;
         document::TextReadOptions read_options;
@@ -84,10 +87,26 @@ struct PersistentBuildResult {
         InMemoryBuildStats stats;
         std::vector<filesystem::ScanError> scan_errors;
         std::vector<BuildError> document_errors;
+        std::uint64_t temporary_segment_count{};
+};
+
+struct PersistentBuildOptions {
+        InMemoryBuildOptions in_memory_options;
+        std::uint64_t segment_flush_threshold_bytes{
+                kDefaultSegmentFlushThresholdBytes};
 };
 
 class IndexBuilder {
       public:
+        /**
+         * @brief Creates a persistent builder with a positive flush threshold.
+         * @param options Scanner, reader, tokenizer, and Segment batching
+         * configuration.
+         * @throws std::invalid_argument If the threshold or nested reader or
+         * tokenizer configuration is invalid.
+         */
+        explicit IndexBuilder(PersistentBuildOptions options = {});
+
         /**
          * @brief Prepares an index directory for a source tree.
          * @param source Existing source path to index.
@@ -101,6 +120,9 @@ class IndexBuilder {
         [[nodiscard]] PersistentBuildResult
         build(const std::filesystem::path &source,
               const std::filesystem::path &index_directory) const;
+
+      private:
+        PersistentBuildOptions options_;
 };
 
 } // namespace snowseek::index
