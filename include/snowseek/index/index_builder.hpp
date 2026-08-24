@@ -6,8 +6,10 @@
 #include "snowseek/filesystem/scanner.hpp"
 #include "snowseek/index/index.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -15,6 +17,9 @@ namespace snowseek::index {
 
 inline constexpr std::uint64_t kDefaultSegmentFlushThresholdBytes =
         128ULL * 1024ULL * 1024ULL;
+inline constexpr std::uint64_t kDefaultTemporarySpaceBudgetBytes =
+        std::numeric_limits<std::uint64_t>::max();
+inline constexpr std::size_t kDefaultMergeFanIn = 16;
 
 struct InMemoryBuildOptions {
         filesystem::ScanOptions scan_options;
@@ -88,22 +93,28 @@ struct PersistentBuildResult {
         std::vector<filesystem::ScanError> scan_errors;
         std::vector<BuildError> document_errors;
         std::uint64_t temporary_segment_count{};
+        std::uint64_t temporary_peak_bytes{};
+        std::uint64_t merge_pass_count{};
 };
 
 struct PersistentBuildOptions {
         InMemoryBuildOptions in_memory_options;
         std::uint64_t segment_flush_threshold_bytes{
                 kDefaultSegmentFlushThresholdBytes};
+        std::uint64_t temporary_space_budget_bytes{
+                kDefaultTemporarySpaceBudgetBytes};
+        std::size_t merge_fan_in{kDefaultMergeFanIn};
 };
 
 class IndexBuilder {
       public:
         /**
-         * @brief Creates a persistent builder with a positive flush threshold.
+         * @brief Creates a persistent builder with positive resource limits.
          * @param options Scanner, reader, tokenizer, and Segment batching
          * configuration.
-         * @throws std::invalid_argument If the threshold or nested reader or
-         * tokenizer configuration is invalid.
+         * @throws std::invalid_argument If the flush threshold or temporary
+         * budget is zero, fan-in is below two, or nested reader or tokenizer
+         * configuration is invalid.
          */
         explicit IndexBuilder(PersistentBuildOptions options = {});
 

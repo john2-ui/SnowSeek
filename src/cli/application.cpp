@@ -6,9 +6,12 @@
 #include "snowseek/storage/index_file.hpp"
 
 #include <charconv>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -23,6 +26,11 @@ enum class QueryOutputFormat {
         paths_only,
 };
 
+struct IndexCommandOptions {
+        std::filesystem::path index_directory;
+        index::PersistentBuildOptions build;
+};
+
 struct QueryCommandOptions {
         query::SearchOptions search;
         QueryOutputFormat output = QueryOutputFormat::rich_text;
@@ -32,15 +40,130 @@ struct QueryCommandOptions {
 void print_help() {
         std::cout << "SnowSeek " << kVersion << "\n\n"
                   << "Usage:\n"
-                  << "  snowseek index <source> --index <dir>\n"
+                  << "  snowseek index <source> --index <dir> [options]\n"
                   << "  snowseek query <index> <expression> [options]\n"
                   << "  snowseek stats|verify <index>\n";
-        std::cout << "\nQuery options:\n"
+        std::cout << "\nIndex options:\n"
+                  << "  --temporary-space-limit <size>  Limit private build "
+                     "bytes\n"
+                  << "  --merge-fan-in <N>              Merge at most N "
+                     "Segments (min 2)\n"
+                  << "  Sizes accept B, KiB, MiB, GiB, or TiB suffixes\n"
+                  << "\nQuery options:\n"
                   << "  --source <dir>   Read Top-K source snippets\n"
                   << "  --top-k <N>      Return at most N results (max 1000)\n"
                   << "  --jsonl          Emit one JSON object per result\n"
                   << "  --paths-only     Emit one relative path per result\n"
                   << "  --explain        Include per-term BM25 contributions\n";
+}
+
+/**
+ * @brief Parses a positive temporary-space size with optional IEC suffix.
+ * @param text Decimal integer followed by B, KiB, MiB, GiB, TiB, or nothing.
+ * @return Size converted to bytes.
+ * @throws std::invalid_argument If the number or suffix is malformed or zero.
+ * @throws std::overflow_error If conversion exceeds std::uint64_t.
+ */
+[[nodiscard]] std::uint64_t parse_byte_size(std::string_view text) {
+        std::uint64_t value = 0;
+        const auto result =
+                std::from_chars(text.data(), text.data() + text.size(), value);
+        if (result.ec == std::errc::result_out_of_range) {
+                throw std::overflow_error(
+                        "--temporary-space-limit exceeds uint64_t");
+        }
+        if (result.ec != std::errc{} || value == 0) {
+                throw std::invalid_argument(
+                        "--temporary-space-limit requires a positive size");
+        }
+
+        const auto suffix =
+                text.substr(static_cast<std::size_t>(result.ptr - text.data()));
+        std::uint64_t multiplier = 1;
+        if (suffix.empty() || suffix == "B") {
+                multiplier = 1;
+        } else if (suffix == "KiB") {
+                multiplier = 1ULL << 10U;
+        } else if (suffix == "MiB") {
+                multiplier = 1ULL << 20U;
+        } else if (suffix == "GiB") {
+                multiplier = 1ULL << 30U;
+        } else if (suffix == "TiB") {
+                multiplier = 1ULL << 40U;
+        } else {
+                throw std::invalid_argument(
+                        "--temporary-space-limit has an invalid IEC suffix");
+        }
+        if (value > std::numeric_limits<std::uint64_t>::max() / multiplier) {
+                throw std::overflow_error(
+                        "--temporary-space-limit exceeds uint64_t");
+        }
+        return value * multiplier;
+}
+
+/**
+ * @brief Parses the minimum-two Segment merge fan-in.
+ * @param text Decimal integer supplied by the CLI.
+ * @return Fan-in representable by std::size_t.
+ * @throws std::invalid_argument If the value is malformed or below two.
+ */
+[[nodiscard]] std::size_t parse_merge_fan_in(std::string_view text) {
+        std::size_t value = 0;
+        const auto result =
+                std::from_chars(text.data(), text.data() + text.size(), value);
+        if (text.empty() || result.ec != std::errc{} ||
+            result.ptr != text.data() + text.size() || value < 2) {
+                throw std::invalid_argument(
+                        "--merge-fan-in requires an integer of at least two");
+        }
+        return value;
+}
+
+/**
+ * @brief Parses persistent index destination and resource options.
+ * @param argc Full process argument count.
+ * @param argv Writable process argument vector.
+ * @return Validated destination and builder configuration.
+ * @throws std::invalid_argument If an option is unknown, missing, or repeated.
+ */
+[[nodiscard]] IndexCommandOptions parse_index_options(int argc, char *argv[]) {
+        IndexCommandOptions options;
+        bool has_index = false;
+        bool has_temporary_limit = false;
+        bool has_merge_fan_in = false;
+        for (int argument = 3; argument < argc; ++argument) {
+                const std::string_view option(argv[argument]);
+                if (argument + 1 >= argc) {
+                        throw std::invalid_argument(std::string(option) +
+                                                    " requires a value");
+                }
+                if (option == "--index" && !has_index) {
+                        options.index_directory = argv[++argument];
+                        has_index = true;
+                } else if (option == "--temporary-space-limit" &&
+                           !has_temporary_limit) {
+                        options.build.temporary_space_budget_bytes =
+                                parse_byte_size(argv[++argument]);
+                        has_temporary_limit = true;
+                } else if (option == "--merge-fan-in" && !has_merge_fan_in) {
+                        options.build.merge_fan_in =
+                                parse_merge_fan_in(argv[++argument]);
+                        has_merge_fan_in = true;
+                } else if (option == "--index" ||
+                           option == "--temporary-space-limit" ||
+                           option == "--merge-fan-in") {
+                        throw std::invalid_argument(std::string(option) +
+                                                    " may appear only once");
+                } else {
+                        throw std::invalid_argument("unknown index option: " +
+                                                    std::string(option));
+                }
+        }
+        if (!has_index || options.index_directory.empty()) {
+                throw std::invalid_argument(
+                        "--index requires one unique directory");
+        }
+        return options;
 }
 
 /**
@@ -91,7 +214,8 @@ void select_output(QueryCommandOptions &options, QueryOutputFormat format) {
                 if (option == "--source") {
                         if (has_source || index + 1 >= argc) {
                                 throw std::invalid_argument(
-                                        "--source requires one unique directory");
+                                        "--source requires one unique "
+                                        "directory");
                         }
                         options.search.source_root = argv[++index];
                         has_source = true;
@@ -207,27 +331,25 @@ void print_rich_result(const query::SearchResult &result) {
  */
 void print_json_result(const query::SearchResult &result,
                        bool include_explanation) {
-        std::cout << "{\"path\":\""
-                  << json_escape(result.path.generic_string())
-                  << "\",\"line\":" << result.line << ",\"score\":"
-                  << format_score(result.score) << ",\"snippet\":\""
-                  << json_escape(result.snippet) << '"';
+        std::cout << "{\"path\":\"" << json_escape(result.path.generic_string())
+                  << "\",\"line\":" << result.line
+                  << ",\"score\":" << format_score(result.score)
+                  << ",\"snippet\":\"" << json_escape(result.snippet) << '"';
         if (include_explanation) {
                 std::cout << ",\"explanation\":[";
-                for (std::size_t index = 0;
-                     index < result.explanation.size(); ++index) {
+                for (std::size_t index = 0; index < result.explanation.size();
+                     ++index) {
                         if (index != 0) {
                                 std::cout << ',';
                         }
                         const auto &contribution = result.explanation[index];
-                        std::cout << "{\"term\":\""
-                                  << json_escape(contribution.term)
-                                  << "\",\"tf\":"
-                                  << contribution.term_frequency
-                                  << ",\"df\":"
-                                  << contribution.document_frequency
-                                  << ",\"score\":"
-                                  << format_score(contribution.score) << '}';
+                        std::cout
+                                << "{\"term\":\""
+                                << json_escape(contribution.term)
+                                << "\",\"tf\":" << contribution.term_frequency
+                                << ",\"df\":" << contribution.document_frequency
+                                << ",\"score\":"
+                                << format_score(contribution.score) << '}';
                 }
                 std::cout << ']';
         }
@@ -237,13 +359,13 @@ void print_json_result(const query::SearchResult &result,
 /**
  * @brief Builds and publishes one persistent v1 Segment.
  * @param source Corpus root to scan.
- * @param index_directory Destination index directory.
+ * @param options Destination and persistent-build resource limits.
  * @return Zero for a complete index or two when recoverable files were skipped.
  */
 int run_index(const std::filesystem::path &source,
-              const std::filesystem::path &index_directory) {
-        const auto result =
-                index::IndexBuilder{}.build(source, index_directory);
+              const IndexCommandOptions &options) {
+        const auto result = index::IndexBuilder(options.build)
+                                    .build(source, options.index_directory);
         for (const auto &error : result.scan_errors) {
                 std::cerr << "scan warning: " << error.path << ": "
                           << error.error.message() << '\n';
@@ -268,7 +390,12 @@ int run_index(const std::filesystem::path &source,
                   << "memory_posting_bytes="
                   << result.stats.memory.posting_bytes << '\n'
                   << "memory_estimated_peak_bytes="
-                  << result.stats.memory.estimated_peak_bytes << '\n';
+                  << result.stats.memory.estimated_peak_bytes << '\n'
+                  << "temporary_segment_count="
+                  << result.temporary_segment_count << '\n'
+                  << "temporary_peak_bytes=" << result.temporary_peak_bytes
+                  << '\n'
+                  << "merge_pass_count=" << result.merge_pass_count << '\n';
         return result.scan_errors.empty() && result.document_errors.empty() ? 0
                                                                             : 2;
 }
@@ -281,8 +408,7 @@ int run_index(const std::filesystem::path &source,
  * @return Zero after a successful query, including an empty result.
  */
 int run_query(const std::filesystem::path &index_directory,
-              std::string_view expression,
-              const QueryCommandOptions &options) {
+              std::string_view expression, const QueryCommandOptions &options) {
         const query::QueryEngine engine(index_directory);
         for (const auto &result : engine.search(expression, options.search)) {
                 switch (options.output) {
@@ -345,9 +471,9 @@ int run(int argc, char *argv[]) {
                 // Dispatch only documented command shapes so malformed
                 // invocations fail before touching an index or corpus.
                 const std::string_view command(argv[1]);
-                if (command == "index" && argc == 5 &&
-                    std::string_view(argv[3]) == "--index") {
-                        return run_index(argv[2], argv[4]);
+                if (command == "index" && argc >= 3) {
+                        return run_index(argv[2],
+                                         parse_index_options(argc, argv));
                 }
                 if (command == "query" && argc >= 4) {
                         return run_query(argv[2], argv[3],

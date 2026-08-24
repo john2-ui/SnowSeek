@@ -88,13 +88,27 @@ void finish_output(std::ofstream &output) {
 }
 
 /**
+ * @brief Removes one completed merge spool before the next merge group.
+ * @param path Private spool path owned by the current build workspace.
+ * @throws std::runtime_error If the spool cannot be removed.
+ */
+void remove_spool(const std::filesystem::path &path) {
+        std::error_code error;
+        const bool removed = std::filesystem::remove(path, error);
+        if (error || !removed) {
+                throw std::runtime_error("failed to remove merge spool: " +
+                                         path.string());
+        }
+}
+
+/**
  * @brief Reads one validated v1 header from a Segment.
  * @param path Segment path.
  * @return Decoded header.
  * @throws std::runtime_error If opening or header decoding fails.
  */
-[[nodiscard]] IndexHeader read_segment_header(
-        const std::filesystem::path &path) {
+[[nodiscard]] IndexHeader
+read_segment_header(const std::filesystem::path &path) {
         auto input = open_input(path);
         return read_header(input);
 }
@@ -124,9 +138,7 @@ class TermCursor {
         }
 
         /** @brief Returns whether this cursor currently names a term. */
-        [[nodiscard]] bool valid() const noexcept {
-                return valid_;
-        }
+        [[nodiscard]] bool valid() const noexcept { return valid_; }
 
         /** @brief Returns the current normalized term. */
         [[nodiscard]] const std::string &term() const noexcept { return term_; }
@@ -147,11 +159,10 @@ class TermCursor {
                         term_.clear();
                         return;
                 }
-                record_ = TermRecord{read_u64_le(term_records_),
-                                     read_u32_le(term_records_),
-                                     read_u32_le(term_records_),
-                                     read_u64_le(term_records_),
-                                     read_u64_le(term_records_)};
+                record_ = TermRecord{
+                        read_u64_le(term_records_), read_u32_le(term_records_),
+                        read_u32_le(term_records_), read_u64_le(term_records_),
+                        read_u64_le(term_records_)};
                 term_.assign(record_.term_length, '\0');
                 seek_to(term_bytes_,
                         checked_add(header_.sections[2].offset,
@@ -174,17 +185,18 @@ class TermCursor {
                            std::uint64_t &output_position_offset) {
                 seek_to(postings_,
                         checked_add(header_.sections[3].offset,
-                                    record_.posting_offset,
-                                    "posting offset"));
+                                    record_.posting_offset, "posting offset"));
                 for (std::uint32_t index = 0;
                      index < record_.document_frequency; ++index) {
                         const auto local_document = read_u32_le(postings_);
                         const auto frequency = read_u32_le(postings_);
                         const auto position_offset = read_u64_le(postings_);
-                        const auto global_document = checked_narrow<std::uint32_t>(
-                                checked_add(document_base_, local_document,
-                                            "global document id"),
-                                "global document id");
+                        const auto global_document =
+                                checked_narrow<std::uint32_t>(
+                                        checked_add(document_base_,
+                                                    local_document,
+                                                    "global document id"),
+                                        "global document id");
                         write_u32_le(postings_output, global_document);
                         write_u32_le(postings_output, frequency);
                         write_u64_le(postings_output, output_position_offset);
@@ -228,16 +240,15 @@ class TermCursor {
  * @throws std::runtime_error If cursor input is malformed or consumer fails.
  */
 template <typename Consumer>
-void walk_terms(const std::vector<SegmentSource> &sources,
-                Consumer consumer) {
+void walk_terms(const std::vector<SegmentSource> &sources, Consumer consumer) {
         std::vector<TermCursor> cursors;
         cursors.reserve(sources.size());
         std::uint64_t document_base = 0;
         for (const auto &source : sources) {
                 cursors.emplace_back(source, document_base);
-                document_base = checked_add(document_base,
-                                            source.stats.document_count,
-                                            "document count");
+                document_base =
+                        checked_add(document_base, source.stats.document_count,
+                                    "document count");
         }
 
         const auto compare = [&cursors](std::size_t left, std::size_t right) {
@@ -290,9 +301,9 @@ void merge_documents(const std::vector<SegmentSource> &sources,
                      std::ostream &paths_output) {
         std::uint64_t document_count = 0;
         for (const auto &source : sources) {
-                document_count = checked_add(document_count,
-                                             source.stats.document_count,
-                                             "document count");
+                document_count =
+                        checked_add(document_count, source.stats.document_count,
+                                    "document count");
         }
         write_u64_le(documents_output, document_count);
 
@@ -341,9 +352,9 @@ void merge_documents(const std::vector<SegmentSource> &sources,
                         paths_output.write(path_bytes.data(),
                                            static_cast<std::streamsize>(
                                                    path_bytes.size()));
-                        output_path_offset = checked_add(
-                                output_path_offset, path_length,
-                                "paths section length");
+                        output_path_offset =
+                                checked_add(output_path_offset, path_length,
+                                            "paths section length");
                 }
                 document_base = checked_add(document_base, local_count,
                                             "document base");
@@ -375,10 +386,11 @@ copy_spool(const std::filesystem::path &path, std::ostream &output,
                                         "failed to assemble merged Segment");
                         }
                         checksum.update(std::string_view(
-                                buffer.data(), static_cast<std::size_t>(count)));
-                        copied = checked_add(
-                                copied, static_cast<std::uint64_t>(count),
-                                "spool length");
+                                buffer.data(),
+                                static_cast<std::size_t>(count)));
+                        copied = checked_add(copied,
+                                             static_cast<std::uint64_t>(count),
+                                             "spool length");
                 }
         }
         if (!input.eof()) {
@@ -405,7 +417,7 @@ copy_spool(const std::filesystem::path &path, std::ostream &output,
 
 } // namespace
 
-std::uint64_t
+SegmentMergeResult
 merge_index_files(const std::filesystem::path &output,
                   const std::vector<SegmentSource> &sources) {
         if (sources.empty()) {
@@ -430,13 +442,11 @@ merge_index_files(const std::filesystem::path &output,
 
         // The first term pass discovers the fixed table size required by v1.
         std::uint64_t term_count = 0;
-        walk_terms(sources,
-                   [&term_count](const std::string &,
-                                 const std::vector<std::size_t> &,
-                                 std::vector<TermCursor> &) {
-                           term_count = checked_add(term_count, 1,
-                                                    "term count");
-                   });
+        walk_terms(sources, [&term_count](const std::string &,
+                                          const std::vector<std::size_t> &,
+                                          std::vector<TermCursor> &) {
+                term_count = checked_add(term_count, 1, "term count");
+        });
 
         auto term_records_output = open_output(term_records_path);
         auto term_bytes_output = open_output(term_bytes_path);
@@ -445,56 +455,50 @@ merge_index_files(const std::filesystem::path &output,
         std::uint64_t term_bytes_written = 0;
         std::uint64_t posting_offset = 0;
         std::uint64_t position_offset = 0;
-        const auto term_bytes_begin = checked_add(
-                8, checked_multiply(term_count, kTermRecordSize,
-                                    "term table length"),
-                "term byte offset");
+        const auto term_bytes_begin =
+                checked_add(8,
+                            checked_multiply(term_count, kTermRecordSize,
+                                             "term table length"),
+                            "term byte offset");
 
         // The second pass writes merged term metadata and remapped postings.
-        walk_terms(
-                sources,
-                [&](const std::string &term,
-                    const std::vector<std::size_t> &group,
-                    std::vector<TermCursor> &cursors) {
-                        std::uint64_t document_frequency = 0;
-                        for (const auto index : group) {
-                                document_frequency = checked_add(
-                                        document_frequency,
-                                        cursors[index].document_frequency(),
-                                        "document frequency");
-                        }
-                        const auto posting_length = checked_multiply(
-                                document_frequency, kPostingRecordSize,
-                                "term posting length");
-                        write_u64_le(term_records_output,
-                                     checked_add(term_bytes_begin,
-                                                 term_bytes_written,
-                                                 "term offset"));
-                        write_u32_le(term_records_output,
-                                     checked_narrow<std::uint32_t>(
-                                             term.size(), "term length"));
-                        write_u32_le(term_records_output,
-                                     checked_narrow<std::uint32_t>(
-                                             document_frequency,
-                                             "document frequency"));
-                        write_u64_le(term_records_output, posting_offset);
-                        write_u64_le(term_records_output, posting_length);
-                        term_bytes_output.write(
-                                term.data(),
-                                static_cast<std::streamsize>(term.size()));
+        walk_terms(sources, [&](const std::string &term,
+                                const std::vector<std::size_t> &group,
+                                std::vector<TermCursor> &cursors) {
+                std::uint64_t document_frequency = 0;
+                for (const auto index : group) {
+                        document_frequency =
+                                checked_add(document_frequency,
+                                            cursors[index].document_frequency(),
+                                            "document frequency");
+                }
+                const auto posting_length =
+                        checked_multiply(document_frequency, kPostingRecordSize,
+                                         "term posting length");
+                write_u64_le(term_records_output,
+                             checked_add(term_bytes_begin, term_bytes_written,
+                                         "term offset"));
+                write_u32_le(term_records_output,
+                             checked_narrow<std::uint32_t>(term.size(),
+                                                           "term length"));
+                write_u32_le(term_records_output,
+                             checked_narrow<std::uint32_t>(
+                                     document_frequency, "document frequency"));
+                write_u64_le(term_records_output, posting_offset);
+                write_u64_le(term_records_output, posting_length);
+                term_bytes_output.write(
+                        term.data(), static_cast<std::streamsize>(term.size()));
 
-                        for (const auto index : group) {
-                                cursors[index].copy_postings(
-                                        postings_output, positions_output,
-                                        position_offset);
-                        }
-                        term_bytes_written = checked_add(
-                                term_bytes_written, term.size(),
-                                "term bytes length");
-                        posting_offset = checked_add(
-                                posting_offset, posting_length,
-                                "posting offset");
-                });
+                for (const auto index : group) {
+                        cursors[index].copy_postings(postings_output,
+                                                     positions_output,
+                                                     position_offset);
+                }
+                term_bytes_written = checked_add(
+                        term_bytes_written, term.size(), "term bytes length");
+                posting_offset = checked_add(posting_offset, posting_length,
+                                             "posting offset");
+        });
         finish_output(term_records_output);
         finish_output(term_bytes_output);
         finish_output(postings_output);
@@ -506,9 +510,9 @@ merge_index_files(const std::filesystem::path &output,
         candidate.write(empty_header.data(), empty_header.size());
         IndexHeader header;
         std::uint64_t file_offset = kIndexHeaderSize;
+        std::uint64_t spool_bytes = 0;
         std::array<char, kCopyBufferSize> copy_buffer{};
-        const std::array<std::vector<std::filesystem::path>,
-                         kIndexSectionCount>
+        const std::array<std::vector<std::filesystem::path>, kIndexSectionCount>
                 section_parts{{{documents_path},
                                {paths_path},
                                {term_records_path, term_bytes_path},
@@ -527,11 +531,12 @@ merge_index_files(const std::filesystem::path &output,
                         section_length = term_count_prefix.size();
                 }
                 for (const auto &part : section_parts[index]) {
-                        section_length = checked_add(
-                                section_length,
-                                copy_spool(part, candidate, checksum,
-                                           copy_buffer),
-                                "section length");
+                        const auto copied = copy_spool(part, candidate,
+                                                       checksum, copy_buffer);
+                        spool_bytes = checked_add(spool_bytes, copied,
+                                                  "merge spool bytes");
+                        section_length = checked_add(section_length, copied,
+                                                     "section length");
                 }
                 descriptor.length = section_length;
                 descriptor.checksum = checksum.value();
@@ -543,13 +548,23 @@ merge_index_files(const std::filesystem::path &output,
         write_header(candidate, header);
         finish_output(candidate);
 
-        const auto source_bytes = checked_multiply(
-                sources.size(), sizeof(SegmentSource) + sizeof(TermCursor) +
-                                        2 * sizeof(std::size_t),
-                "merge cursor memory");
-        return checked_add(
-                source_bytes, kCopyBufferSize + kIndexHeaderSize,
-                "merge working memory");
+        const auto peak_additional_disk_bytes = checked_add(
+                spool_bytes, header.file_size, "merge temporary bytes");
+        for (const auto &parts : section_parts) {
+                for (const auto &part : parts) {
+                        remove_spool(part);
+                }
+        }
+
+        const auto source_bytes =
+                checked_multiply(sources.size(),
+                                 sizeof(SegmentSource) + sizeof(TermCursor) +
+                                         2 * sizeof(std::size_t),
+                                 "merge cursor memory");
+        return SegmentMergeResult{
+                checked_add(source_bytes, kCopyBufferSize + kIndexHeaderSize,
+                            "merge working memory"),
+                peak_additional_disk_bytes};
 }
 
 } // namespace snowseek::storage::detail

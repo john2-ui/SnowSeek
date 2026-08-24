@@ -374,19 +374,43 @@ void counts_failed_document_buffers() {
                 "failed documents should not allocate postings");
 }
 
-/** @brief Verifies positive persistent Segment flush configuration. */
-void rejects_zero_segment_flush_threshold() {
+/** @brief Verifies persistent builder resource limits. */
+void validates_persistent_resource_options() {
         snowseek::index::PersistentBuildOptions options;
         options.segment_flush_threshold_bytes = 0;
         snowseek::test::require_throws<std::invalid_argument>(
                 [&options] {
-                        static_cast<void>(snowseek::index::IndexBuilder(options));
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
                 },
                 "a zero flush threshold should be rejected");
+
+        options = {};
+        options.temporary_space_budget_bytes = 0;
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
+                },
+                "a zero temporary-space budget should be rejected");
+
+        for (const std::size_t fan_in : {std::size_t{0}, std::size_t{1}}) {
+                options = {};
+                options.merge_fan_in = fan_in;
+                snowseek::test::require_throws<std::invalid_argument>(
+                        [&options] {
+                                static_cast<void>(
+                                        snowseek::index::IndexBuilder(options));
+                        },
+                        "a fan-in below two should be rejected");
+        }
+
+        options.merge_fan_in = 2;
+        static_cast<void>(snowseek::index::IndexBuilder(options));
 }
 
-/** @brief Verifies multi-Segment output matches a single-batch build. */
-void merges_flushed_segments_byte_for_byte() {
+/** @brief Verifies bounded multi-level output matches a single-batch build. */
+void merges_multiple_levels_byte_for_byte() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
         const auto single_directory = temporary.path() / "single";
@@ -395,37 +419,40 @@ void merges_flushed_segments_byte_for_byte() {
         write_file(source / "a.txt", "alpha shared alpha");
         write_file(source / "b.txt", "beta shared");
         write_file(source / "c.txt", "gamma shared gamma");
+        write_file(source / "d.txt", "delta shared");
+        write_file(source / "e.txt", "epsilon shared epsilon");
 
         snowseek::index::PersistentBuildOptions single_options;
         single_options.segment_flush_threshold_bytes =
                 std::numeric_limits<std::uint64_t>::max();
-        const auto single =
-                snowseek::index::IndexBuilder(single_options)
-                        .build(source, single_directory);
+        const auto single = snowseek::index::IndexBuilder(single_options)
+                                    .build(source, single_directory);
 
         snowseek::index::PersistentBuildOptions merged_options;
         merged_options.segment_flush_threshold_bytes = 1;
-        const auto merged =
-                snowseek::index::IndexBuilder(merged_options)
-                        .build(source, merged_directory);
+        merged_options.merge_fan_in = 2;
+        const auto merged = snowseek::index::IndexBuilder(merged_options)
+                                    .build(source, merged_directory);
 
         snowseek::test::require_equal(
                 single.temporary_segment_count, std::uint64_t{1},
                 "an unlimited threshold should create one temporary Segment");
         snowseek::test::require_equal(
-                merged.temporary_segment_count, std::uint64_t{3},
+                merged.temporary_segment_count, std::uint64_t{5},
                 "a one-byte threshold should flush every document");
+        snowseek::test::require_equal(
+                merged.merge_pass_count, std::uint64_t{3},
+                "five Segments with fan-in two should require three levels");
         snowseek::test::require_equal(
                 read_file(single.index_file), read_file(merged.index_file),
                 "K-way merge should reproduce single-batch v1 bytes");
         const auto loaded =
                 snowseek::storage::read_index_file(merged.index_file);
         const auto *shared = loaded.index.find("shared");
-        snowseek::test::require(shared != nullptr && shared->size() == 3,
+        snowseek::test::require(shared != nullptr && shared->size() == 5,
                                 "a shared term should merge all documents");
         snowseek::test::require_equal(
-                (*shared)[2].document_id,
-                snowseek::document::DocumentId{2},
+                (*shared)[4].document_id, snowseek::document::DocumentId{4},
                 "later Segment document IDs should be remapped globally");
 
         std::size_t published_entries = 0;
@@ -437,6 +464,52 @@ void merges_flushed_segments_byte_for_byte() {
         snowseek::test::require_equal(
                 published_entries, std::size_t{1},
                 "successful publication should clean every workspace file");
+}
+
+/** @brief Verifies hard temporary-space limits preserve published output. */
+void enforces_temporary_space_budget() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha beta gamma");
+
+        snowseek::index::PersistentBuildOptions allowed_options;
+        allowed_options.temporary_space_budget_bytes = 1ULL << 20U;
+        const auto allowed = snowseek::index::IndexBuilder(allowed_options)
+                                     .build(source, destination);
+        snowseek::test::require(
+                allowed.temporary_peak_bytes > 0 &&
+                        allowed.temporary_peak_bytes <= (1ULL << 20U),
+                "a successful build should report an in-budget peak");
+        const auto published_before = read_file(allowed.index_file);
+
+        snowseek::index::PersistentBuildOptions denied_options;
+        denied_options.temporary_space_budget_bytes = 1;
+        bool diagnosed = false;
+        try {
+                static_cast<void>(snowseek::index::IndexBuilder(denied_options)
+                                          .build(source, destination));
+        } catch (const std::runtime_error &error) {
+                diagnosed = std::string(error.what())
+                                    .find("temporary space budget exceeded") !=
+                            std::string::npos;
+        }
+        snowseek::test::require(diagnosed,
+                                "an undersized budget should report its limit");
+        snowseek::test::require_equal(
+                read_file(allowed.index_file), published_before,
+                "a budget failure should preserve the published Segment");
+
+        std::size_t entries = 0;
+        for (const auto &entry :
+             std::filesystem::directory_iterator(destination)) {
+                static_cast<void>(entry);
+                ++entries;
+        }
+        snowseek::test::require_equal(
+                entries, std::size_t{1},
+                "a budget failure should clean its private workspace");
 }
 
 /** @brief Verifies empty and one-document persistent builds. */
@@ -461,10 +534,12 @@ void handles_empty_and_oversized_batches() {
         snowseek::test::require_equal(
                 snowseek::storage::validate_index_file(empty.index_file)
                         .document_count,
-                std::uint64_t{0}, "an empty corpus should publish a valid index");
-        snowseek::test::require_equal(
-                one.temporary_segment_count, std::uint64_t{1},
-                "one oversized document should flush after its complete commit");
+                std::uint64_t{0},
+                "an empty corpus should publish a valid index");
+        snowseek::test::require_equal(one.temporary_segment_count,
+                                      std::uint64_t{1},
+                                      "one oversized document should flush "
+                                      "after its complete commit");
         snowseek::test::require_equal(
                 snowseek::storage::validate_index_file(one.index_file)
                         .document_count,
@@ -477,8 +552,8 @@ void cleans_workspace_after_publication_failure() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
         const auto destination = temporary.path() / "index";
-        const auto published = destination /
-                               snowseek::storage::kSegmentFileName;
+        const auto published =
+                destination / snowseek::storage::kSegmentFileName;
         std::filesystem::create_directory(source);
         std::filesystem::create_directory(destination);
         std::filesystem::create_directory(published);
@@ -525,10 +600,12 @@ int main() {
                  reports_zero_memory_for_an_empty_corpus},
                 {"counts failed document buffers",
                  counts_failed_document_buffers},
-                {"rejects zero Segment flush threshold",
-                 rejects_zero_segment_flush_threshold},
-                {"merges flushed Segments byte for byte",
-                 merges_flushed_segments_byte_for_byte},
+                {"validates persistent resource options",
+                 validates_persistent_resource_options},
+                {"merges multiple levels byte for byte",
+                 merges_multiple_levels_byte_for_byte},
+                {"enforces temporary space budget",
+                 enforces_temporary_space_budget},
                 {"handles empty and oversized batches",
                  handles_empty_and_oversized_batches},
                 {"cleans workspace after publication failure",

@@ -17,6 +17,8 @@ cmake --build build
 
 ```bash
 ./build/snowseek index ./testdata --index ./snowseek-index
+./build/snowseek index ./testdata --index ./snowseek-index \
+  --temporary-space-limit 4GiB --merge-fan-in 16
 ./build/snowseek query ./snowseek-index timeout --source ./testdata
 ./build/snowseek query ./snowseek-index '"timeout retry"' --source ./testdata
 ./build/snowseek query ./snowseek-index \
@@ -28,9 +30,12 @@ cmake --build build
 索引写入 `segment-0000000000000001.idx`，保存相对源目录的文档路径。若个别文件
 无法读取或分析，成功文档仍会发布，但 `index` 返回状态码 2 并输出诊断。
 `IndexBuilder` 默认在活动索引的容量估算达到 128 MiB 后，于目标目录的私有工作区
-刷写临时 Segment，最后归并为上述单文件。`index` 输出的 `memory_*_bytes` 是构建
-各阶段的分类峰值，不是进程 RSS 硬限制，也不包含分配器、运行库和内核页开销。
-任意持久化或校验失败都不会替换已有索引，工作区会被尽力清理。
+刷写临时 Segment，再以默认 fan-in 16 多级归并为上述单文件。临时空间默认不限额；
+`--temporary-space-limit` 接受字节或 `B`、`KiB`、`MiB`、`GiB`、`TiB`，按输入
+Segment 总大小保守预检 spool 与候选文件的最坏空间，可能早于实际磁盘耗尽而拒绝。
+`index` 输出 `temporary_peak_bytes`、`merge_pass_count` 和 `memory_*_bytes`；前者是
+私有工作区逻辑文件长度峰值，后者是构建各阶段的分类内存估算，不等同于文件系统块
+配额或进程 RSS。任意预算、持久化或校验失败都不会替换已有索引，工作区会被清理。
 
 查询表达式支持括号、大小写不敏感的 `AND`、`OR`、`NOT`、双引号精确短语、
 `path:` Glob 和 `extension:` 精确扩展名过滤。相邻词项不会隐式连接，必须显式写

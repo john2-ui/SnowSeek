@@ -11,8 +11,8 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <iomanip>
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -263,10 +263,14 @@ int run(const BenchmarkOptions &options) {
                   << std::setprecision(3) << throughput << '\n'
                   << "index_bytes=" << index_bytes << '\n'
                   << "segment_flush_threshold_bytes="
-                  << snowseek::index::kDefaultSegmentFlushThresholdBytes
-                  << '\n'
+                  << snowseek::index::kDefaultSegmentFlushThresholdBytes << '\n'
                   << "temporary_segment_count="
                   << result.temporary_segment_count << '\n'
+                  << "merge_fan_in=" << snowseek::index::kDefaultMergeFanIn
+                  << '\n'
+                  << "merge_pass_count=" << result.merge_pass_count << '\n'
+                  << "temporary_peak_bytes=" << result.temporary_peak_bytes
+                  << '\n'
                   << "memory_metadata_bytes="
                   << result.stats.memory.metadata_bytes << '\n'
                   << "memory_reader_peak_bytes="

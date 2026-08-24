@@ -102,7 +102,9 @@ void runs_index_query_stats_and_verify() {
         for (const char *key :
              {"memory_metadata_bytes=", "memory_reader_peak_bytes=",
               "memory_token_peak_bytes=", "memory_dictionary_bytes=",
-              "memory_posting_bytes=", "memory_estimated_peak_bytes="}) {
+              "memory_posting_bytes=", "memory_estimated_peak_bytes=",
+              "temporary_segment_count=", "temporary_peak_bytes=",
+              "merge_pass_count="}) {
                 snowseek::test::require(
                         index.output.find(key) != std::string::npos,
                         "index output should expose " + std::string(key));
@@ -126,6 +128,68 @@ void runs_index_query_stats_and_verify() {
         snowseek::test::require_equal(
                 invoke({"snowseek", "verify", destination.string()}), 0,
                 "verify command should succeed");
+}
+
+/** @brief Verifies index resource options and IEC size parsing. */
+void parses_index_resource_options() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto first_destination = temporary.path() / "first-index";
+        const auto second_destination = temporary.path() / "second-index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha beta");
+
+        snowseek::test::require_equal(
+                invoke({"snowseek", "index", source.string(), "--merge-fan-in",
+                        "2", "--temporary-space-limit", "1MiB", "--index",
+                        first_destination.string()}),
+                0,
+                "index options should allow arbitrary ordering and IEC sizes");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "index", source.string(), "--index",
+                        second_destination.string(), "--temporary-space-limit",
+                        "1048576"}),
+                0, "a suffix-free temporary limit should mean bytes");
+        for (const std::string_view limit :
+             {"1048576B", "1024KiB", "1MiB", "1GiB", "1TiB"}) {
+                snowseek::test::require_equal(
+                        invoke({"snowseek", "index", source.string(), "--index",
+                                second_destination.string(),
+                                "--temporary-space-limit", std::string(limit)}),
+                        0, "every documented size suffix should be accepted");
+        }
+
+        for (const std::vector<std::string> &arguments :
+             {std::vector<std::string>{"snowseek", "index", source.string(),
+                                       "--index", first_destination.string(),
+                                       "--temporary-space-limit", "0"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-space-limit", "1MB"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-space-limit",
+               "18446744073709551615TiB"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--merge-fan-in", "1"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--merge-fan-in", "2",
+               "--merge-fan-in", "3"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-space-limit", "1MiB",
+               "--temporary-space-limit", "2MiB"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-space-limit"},
+              {"snowseek", "index", source.string(), "--merge-fan-in", "2"}}) {
+                snowseek::test::require_equal(
+                        invoke(arguments), 1,
+                        "invalid index resource options should be rejected");
+        }
+
+        const auto denied_destination = temporary.path() / "denied-index";
+        snowseek::test::require_equal(
+                invoke({"snowseek", "index", source.string(), "--index",
+                        denied_destination.string(), "--temporary-space-limit",
+                        "1B"}),
+                1, "an insufficient CLI budget should fail before publication");
 }
 
 /** @brief Verifies JSONL and paths-only presentation modes. */
@@ -201,6 +265,8 @@ int main() {
         return snowseek::test::run({
                 {"runs index, query, stats, and verify",
                  runs_index_query_stats_and_verify},
+                {"parses index resource options",
+                 parses_index_resource_options},
                 {"renders query output modes", renders_query_output_modes},
                 {"reports CLI failures", reports_cli_failures},
         });

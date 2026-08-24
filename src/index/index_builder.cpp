@@ -2,6 +2,7 @@
 
 #include "snowseek/common/checked_arithmetic.hpp"
 #include "snowseek/storage/index_file.hpp"
+#include "storage/index_file_internal.hpp"
 #include "storage/segment_merge.hpp"
 
 #include <algorithm>
@@ -100,9 +101,12 @@ class BuildWorkspace {
         /**
          * @brief Creates a unique private build directory below a destination.
          * @param parent Existing index directory that owns the workspace.
+         * @param budget_bytes Maximum logical bytes retained in the workspace.
          * @throws std::system_error If Linux cannot create the workspace.
          */
-        explicit BuildWorkspace(const std::filesystem::path &parent) {
+        BuildWorkspace(const std::filesystem::path &parent,
+                       std::uint64_t budget_bytes)
+            : budget_bytes_(budget_bytes) {
                 auto pattern = (parent / ".snowseek-build-XXXXXX").string();
                 if (::mkdtemp(pattern.data()) == nullptr) {
                         throw std::system_error(
@@ -126,9 +130,194 @@ class BuildWorkspace {
                 return path_;
         }
 
+        /** @brief Returns bytes still permitted by the configured budget. */
+        [[nodiscard]] std::uint64_t remaining_bytes() const noexcept {
+                return budget_bytes_ - used_bytes_;
+        }
+
+        /**
+         * @brief Checks budget and filesystem capacity before a temporary
+         * write.
+         * @param bytes Conservative additional bytes required by the operation.
+         * @throws std::runtime_error If the budget, capacity query, or
+         * available filesystem space cannot satisfy the request.
+         */
+        void require_additional(std::uint64_t bytes) const {
+                if (bytes > remaining_bytes()) {
+                        throw std::runtime_error(
+                                "temporary space budget exceeded");
+                }
+                std::error_code error;
+                const auto space = std::filesystem::space(path_, error);
+                if (error) {
+                        throw std::runtime_error("failed to inspect temporary "
+                                                 "filesystem space: " +
+                                                 error.message());
+                }
+                if (bytes > space.available) {
+                        throw std::runtime_error(
+                                "insufficient temporary filesystem space");
+                }
+        }
+
+        /**
+         * @brief Accounts for one completed file retained by the workspace.
+         * @param bytes Logical file length to add.
+         * @throws std::runtime_error If the completed file exceeds the budget.
+         */
+        void add_file(std::uint64_t bytes) {
+                if (bytes > remaining_bytes()) {
+                        throw std::runtime_error(
+                                "temporary space budget exceeded");
+                }
+                used_bytes_ = checked_add(used_bytes_, bytes,
+                                          "temporary workspace bytes");
+                peak_bytes_ = std::max(peak_bytes_, used_bytes_);
+        }
+
+        /**
+         * @brief Records transient spool and output bytes present during merge.
+         * @param bytes Additional bytes that coexisted with retained files.
+         * @throws std::runtime_error If the observed peak exceeds the budget.
+         */
+        void note_transient_peak(std::uint64_t bytes) {
+                const auto peak = checked_add(used_bytes_, bytes,
+                                              "temporary workspace peak");
+                if (peak > budget_bytes_) {
+                        throw std::runtime_error(
+                                "temporary space budget exceeded");
+                }
+                peak_bytes_ = std::max(peak_bytes_, peak);
+        }
+
+        /**
+         * @brief Deletes and releases one retained temporary file.
+         * @param path File owned by this workspace.
+         * @param bytes Accounted logical length of the file.
+         * @throws std::runtime_error If deletion fails or accounting is
+         * invalid.
+         */
+        void remove_file(const std::filesystem::path &path,
+                         std::uint64_t bytes) {
+                std::error_code error;
+                const bool removed = std::filesystem::remove(path, error);
+                if (error || !removed) {
+                        throw std::runtime_error(
+                                "failed to remove temporary Segment: " +
+                                path.string());
+                }
+                if (bytes > used_bytes_) {
+                        throw std::runtime_error(
+                                "temporary workspace accounting underflow");
+                }
+                used_bytes_ -= bytes;
+        }
+
+        /** @brief Returns the observed logical workspace byte peak. */
+        [[nodiscard]] std::uint64_t peak_bytes() const noexcept {
+                return peak_bytes_;
+        }
+
       private:
         std::filesystem::path path_;
+        std::uint64_t budget_bytes_{};
+        std::uint64_t used_bytes_{};
+        std::uint64_t peak_bytes_{};
 };
+
+struct MergePipelineResult {
+        std::uint64_t memory_bytes{};
+        std::uint64_t pass_count{};
+};
+
+/**
+ * @brief Merges and validates one ordered Segment group, then removes inputs.
+ * @param output Unique intermediate or final candidate path.
+ * @param sources Two or more Segments in global document order.
+ * @param workspace Private workspace enforcing temporary storage limits.
+ * @param memory_bytes Peak merge working-memory estimate updated in place.
+ * @return Validated output Segment descriptor.
+ * @throws std::runtime_error If capacity, merge, validation, or cleanup fails.
+ */
+[[nodiscard]] storage::detail::SegmentSource
+merge_segment_group(const std::filesystem::path &output,
+                    const std::vector<storage::detail::SegmentSource> &sources,
+                    BuildWorkspace &workspace, std::uint64_t &memory_bytes) {
+        std::uint64_t input_bytes = 0;
+        for (const auto &source : sources) {
+                input_bytes = checked_add(input_bytes, source.stats.file_size,
+                                          "merge input bytes");
+        }
+        const auto reserved_bytes =
+                checked_multiply(input_bytes, 2, "merge temporary reservation");
+        workspace.require_additional(reserved_bytes);
+
+        const auto merged = storage::detail::merge_index_files(output, sources);
+        workspace.note_transient_peak(merged.peak_additional_disk_bytes);
+        memory_bytes = std::max(memory_bytes, merged.working_memory_bytes);
+
+        const auto stats = storage::validate_index_file(output);
+        workspace.add_file(stats.file_size);
+        for (const auto &source : sources) {
+                workspace.remove_file(source.path, source.stats.file_size);
+        }
+        return storage::detail::SegmentSource{output, stats};
+}
+
+/**
+ * @brief Reduces Segments through bounded ordered merge levels.
+ * @param candidate Final candidate path produced by the last level.
+ * @param sources Initial Segments in document order; must contain at least two.
+ * @param fan_in Maximum sources consumed by one merge.
+ * @param workspace Private workspace owning every source and output.
+ * @return Peak merge memory estimate and number of merge levels performed.
+ * @throws std::runtime_error If any merge level cannot complete safely.
+ */
+[[nodiscard]] MergePipelineResult
+merge_segment_levels(const std::filesystem::path &candidate,
+                     std::vector<storage::detail::SegmentSource> sources,
+                     std::size_t fan_in, BuildWorkspace &workspace) {
+        MergePipelineResult result;
+
+        // Reduce oversized levels into ordered intermediate Segments.
+        while (sources.size() > fan_in) {
+                std::vector<storage::detail::SegmentSource> next;
+                next.reserve(1 + (sources.size() - 1) / fan_in);
+                std::size_t group_number = 0;
+                for (std::size_t begin = 0; begin < sources.size();
+                     ++group_number) {
+                        const auto count =
+                                std::min(fan_in, sources.size() - begin);
+                        const auto end = begin + count;
+                        std::vector<storage::detail::SegmentSource> group(
+                                sources.begin() +
+                                        static_cast<std::ptrdiff_t>(begin),
+                                sources.begin() +
+                                        static_cast<std::ptrdiff_t>(end));
+                        begin = end;
+                        if (group.size() == 1) {
+                                next.push_back(std::move(group.front()));
+                                continue;
+                        }
+                        const auto output =
+                                workspace.path() /
+                                ("merge-" + std::to_string(result.pass_count) +
+                                 "-" + std::to_string(group_number) + ".idx");
+                        next.push_back(merge_segment_group(
+                                output, group, workspace, result.memory_bytes));
+                }
+                sources = std::move(next);
+                result.pass_count =
+                        checked_add(result.pass_count, 1, "merge pass count");
+        }
+
+        // The remaining bounded group becomes the publishable candidate.
+        static_cast<void>(merge_segment_group(candidate, sources, workspace,
+                                              result.memory_bytes));
+        result.pass_count =
+                checked_add(result.pass_count, 1, "merge pass count");
+        return result;
+}
 
 /**
  * @brief Estimates peak dynamic buffers used by one TextReader invocation.
@@ -252,9 +441,9 @@ estimated_build_error_bytes(const std::vector<BuildError> &errors) {
  */
 [[nodiscard]] std::uint64_t estimated_segment_source_bytes(
         const std::vector<storage::detail::SegmentSource> &segments) {
-        auto bytes = checked_multiply(
-                segments.capacity(),
-                sizeof(storage::detail::SegmentSource), "Segment sources");
+        auto bytes = checked_multiply(segments.capacity(),
+                                      sizeof(storage::detail::SegmentSource),
+                                      "Segment sources");
         for (const auto &segment : segments) {
                 bytes = checked_add(bytes, estimated_path_bytes(segment.path),
                                     "Segment sources");
@@ -376,8 +565,8 @@ void commit_document(const std::filesystem::path &path, ParsedDocument parsed,
         const auto indexed_files =
                 checked_add(stats.indexed_files, 1, "indexed_files");
         const auto indexed_bytes =
-                checked_add(stats.indexed_bytes,
-                            parsed.read_stats.bytes_read, "indexed_bytes");
+                checked_add(stats.indexed_bytes, parsed.read_stats.bytes_read,
+                            "indexed_bytes");
         const auto token_count =
                 checked_add(stats.token_count,
                             static_cast<std::uint64_t>(parsed.tokens.size()),
@@ -455,8 +644,15 @@ IndexBuilder::IndexBuilder(PersistentBuildOptions options)
                 throw std::invalid_argument(
                         "segment flush threshold must be positive");
         }
-        static_cast<void>(
-                InMemoryIndexBuilder(options_.in_memory_options));
+        if (options_.temporary_space_budget_bytes == 0) {
+                throw std::invalid_argument(
+                        "temporary space budget must be positive");
+        }
+        if (options_.merge_fan_in < 2) {
+                throw std::invalid_argument(
+                        "merge fan-in must be at least two");
+        }
+        static_cast<void>(InMemoryIndexBuilder(options_.in_memory_options));
 }
 
 PersistentBuildResult
@@ -472,7 +668,8 @@ IndexBuilder::build(const std::filesystem::path &source,
                 options_.in_memory_options.scan_options);
         auto scan_result = scanner.scan(canonical_source);
         std::filesystem::create_directories(index_directory);
-        BuildWorkspace workspace(index_directory);
+        BuildWorkspace workspace(index_directory,
+                                 options_.temporary_space_budget_bytes);
         PersistentBuildResult result;
         result.stats.scanned_files = scan_result.files.size();
         result.scan_errors = std::move(scan_result.errors);
@@ -487,13 +684,14 @@ IndexBuilder::build(const std::filesystem::path &source,
                 if (batch_documents.size() == 0) {
                         return;
                 }
-                const auto path = workspace.path() /
-                                  ("segment-" +
-                                   std::to_string(segments.size()) + ".idx");
-                const auto stats = storage::write_index_file(
-                        path, batch_documents, batch_index);
-                segments.push_back(storage::detail::SegmentSource{path,
-                                                                  stats});
+                const auto path =
+                        workspace.path() /
+                        ("segment-" + std::to_string(segments.size()) + ".idx");
+                const auto stats = storage::detail::write_index_file_bounded(
+                        path, batch_documents, batch_index,
+                        workspace.remaining_bytes());
+                workspace.add_file(stats.file_size);
+                segments.push_back(storage::detail::SegmentSource{path, stats});
                 batch_documents = {};
                 batch_index = {};
         };
@@ -535,17 +733,16 @@ IndexBuilder::build(const std::filesystem::path &source,
                         batch_documents.estimated_memory_bytes();
                 peak_batch_document_bytes =
                         std::max(peak_batch_document_bytes, document_bytes);
-                const auto index_memory =
-                        batch_index.estimated_memory_usage();
-                result.stats.memory.dictionary_bytes = std::max(
-                        result.stats.memory.dictionary_bytes,
-                        index_memory.dictionary_bytes);
-                result.stats.memory.posting_bytes = std::max(
-                        result.stats.memory.posting_bytes,
-                        index_memory.posting_bytes);
-                auto retained = checked_add(
-                        document_bytes, index_memory.dictionary_bytes,
-                        "active Segment memory");
+                const auto index_memory = batch_index.estimated_memory_usage();
+                result.stats.memory.dictionary_bytes =
+                        std::max(result.stats.memory.dictionary_bytes,
+                                 index_memory.dictionary_bytes);
+                result.stats.memory.posting_bytes =
+                        std::max(result.stats.memory.posting_bytes,
+                                 index_memory.posting_bytes);
+                auto retained = checked_add(document_bytes,
+                                            index_memory.dictionary_bytes,
+                                            "active Segment memory");
                 retained = checked_add(retained, index_memory.posting_bytes,
                                        "active Segment memory");
                 if (retained >= options_.segment_flush_threshold_bytes) {
@@ -554,33 +751,39 @@ IndexBuilder::build(const std::filesystem::path &source,
         }
         flush_batch();
         result.temporary_segment_count = segments.size();
+        const auto segment_source_bytes =
+                estimated_segment_source_bytes(segments);
 
         const auto index_file = index_directory / storage::kSegmentFileName;
         const auto candidate = workspace.path() / "candidate.idx";
         std::uint64_t merge_memory = 0;
         if (segments.empty()) {
-                static_cast<void>(storage::write_index_file(
-                        candidate, document::DocumentStore{},
-                        InMemoryIndex{}));
+                const auto stats = storage::detail::write_index_file_bounded(
+                        candidate, document::DocumentStore{}, InMemoryIndex{},
+                        workspace.remaining_bytes());
+                workspace.add_file(stats.file_size);
+                static_cast<void>(storage::validate_index_file(candidate));
         } else if (segments.size() == 1) {
                 std::filesystem::rename(segments.front().path, candidate);
+                static_cast<void>(storage::validate_index_file(candidate));
         } else {
-                merge_memory = storage::detail::merge_index_files(candidate,
-                                                                  segments);
+                const auto merged =
+                        merge_segment_levels(candidate, std::move(segments),
+                                             options_.merge_fan_in, workspace);
+                merge_memory = merged.memory_bytes;
+                result.merge_pass_count = merged.pass_count;
         }
-        static_cast<void>(storage::validate_index_file(candidate));
+        result.temporary_peak_bytes = workspace.peak_bytes();
 
         auto metadata = estimated_path_list_bytes(scan_result.files);
         metadata = checked_add(metadata,
                                estimated_scan_error_bytes(result.scan_errors),
                                "metadata memory");
         metadata = checked_add(
-                metadata,
-                estimated_build_error_bytes(result.document_errors),
+                metadata, estimated_build_error_bytes(result.document_errors),
                 "metadata memory");
-        metadata = checked_add(metadata,
-                               estimated_segment_source_bytes(segments),
-                               "metadata memory");
+        metadata =
+                checked_add(metadata, segment_source_bytes, "metadata memory");
         result.stats.memory.metadata_bytes = checked_add(
                 metadata, std::max(peak_batch_document_bytes, merge_memory),
                 "metadata memory");

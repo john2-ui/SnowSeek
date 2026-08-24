@@ -48,8 +48,8 @@ using common::detail::checked_multiply;
 /** @brief Narrows a size after checking the destination range. */
 template <typename Destination, typename Source>
 [[nodiscard]] Destination checked_narrow(Source value, std::string_view field) {
-        if (value > static_cast<Source>(
-                            std::numeric_limits<Destination>::max())) {
+        if (value >
+            static_cast<Source>(std::numeric_limits<Destination>::max())) {
                 throw std::runtime_error(std::string(field) +
                                          " exceeds the v1 format limit");
         }
@@ -73,9 +73,11 @@ template <typename Destination, typename Source>
 
 } // namespace
 
-IndexFileStats write_index_file(const std::filesystem::path &path,
-                                const document::DocumentStore &documents,
-                                const index::InMemoryIndex &index) {
+IndexFileStats
+detail::write_index_file_bounded(const std::filesystem::path &path,
+                                 const document::DocumentStore &documents,
+                                 const index::InMemoryIndex &index,
+                                 std::uint64_t maximum_file_size) {
         // Encode paths and their fixed document records in DocumentId order.
         std::ostringstream paths_stream(std::ios::out | std::ios::binary);
         std::ostringstream documents_stream(std::ios::out | std::ios::binary);
@@ -112,17 +114,18 @@ IndexFileStats write_index_file(const std::filesystem::path &path,
         for (const auto &term : terms) {
                 const auto *postings = index.find(term);
                 if (postings == nullptr || postings->empty()) {
-                        throw std::runtime_error(
-                                "index dictionary contains an empty posting list");
+                        throw std::runtime_error("index dictionary contains an "
+                                                 "empty posting list");
                 }
                 const auto document_frequency = checked_narrow<std::uint32_t>(
                         postings->size(), "document frequency");
-                const auto posting_length = checked_multiply(
-                        postings->size(), kPostingRecordSize,
-                        "term posting length");
+                const auto posting_length =
+                        checked_multiply(postings->size(), kPostingRecordSize,
+                                         "term posting length");
                 term_records.push_back(TermRecord{
-                        0, checked_narrow<std::uint32_t>(term.size(),
-                                                        "term length"),
+                        0,
+                        checked_narrow<std::uint32_t>(term.size(),
+                                                      "term length"),
                         document_frequency, posting_offset, posting_length});
                 for (const auto &posting : *postings) {
                         const auto frequency = posting.term_frequency();
@@ -153,10 +156,11 @@ IndexFileStats write_index_file(const std::filesystem::path &path,
         // The fixed term table precedes concatenated term bytes.
         std::ostringstream terms_stream(std::ios::out | std::ios::binary);
         write_u64_le(terms_stream, terms.size());
-        std::uint64_t term_offset = checked_add(
-                8, checked_multiply(terms.size(), kTermRecordSize,
-                                    "term table length"),
-                "term byte offset");
+        std::uint64_t term_offset =
+                checked_add(8,
+                            checked_multiply(terms.size(), kTermRecordSize,
+                                             "term table length"),
+                            "term byte offset");
         for (std::size_t index_value = 0; index_value < terms.size();
              ++index_value) {
                 auto &record = term_records[index_value];
@@ -166,8 +170,9 @@ IndexFileStats write_index_file(const std::filesystem::path &path,
                 write_u32_le(terms_stream, record.document_frequency);
                 write_u64_le(terms_stream, record.posting_offset);
                 write_u64_le(terms_stream, record.posting_length);
-                term_offset = checked_add(term_offset, terms[index_value].size(),
-                                          "terms section length");
+                term_offset =
+                        checked_add(term_offset, terms[index_value].size(),
+                                    "terms section length");
         }
         for (const auto &term : terms) {
                 terms_stream.write(term.data(), term.size());
@@ -190,6 +195,25 @@ IndexFileStats write_index_file(const std::filesystem::path &path,
         }
         header.file_size = offset;
 
+        if (header.file_size > maximum_file_size) {
+                throw std::runtime_error("temporary space budget exceeded "
+                                         "while writing Segment");
+        }
+        std::error_code space_error;
+        const auto parent = path.parent_path().empty()
+                                    ? std::filesystem::path(".")
+                                    : path.parent_path();
+        const auto space = std::filesystem::space(parent, space_error);
+        if (space_error) {
+                throw std::runtime_error(
+                        "failed to inspect temporary filesystem space: " +
+                        space_error.message());
+        }
+        if (header.file_size > space.available) {
+                throw std::runtime_error(
+                        "insufficient temporary filesystem space");
+        }
+
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         if (!output.is_open()) {
                 throw std::runtime_error("failed to create index file: " +
@@ -208,5 +232,12 @@ IndexFileStats write_index_file(const std::filesystem::path &path,
                               posting_count, position_count};
 }
 
+IndexFileStats write_index_file(const std::filesystem::path &path,
+                                const document::DocumentStore &documents,
+                                const index::InMemoryIndex &index) {
+        return detail::write_index_file_bounded(
+                path, documents, index,
+                std::numeric_limits<std::uint64_t>::max());
+}
 
 } // namespace snowseek::storage

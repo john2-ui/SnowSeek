@@ -8,7 +8,35 @@
 #include <string>
 #include <string_view>
 
+namespace snowseek::document {
+class DocumentStore;
+}
+
+namespace snowseek::index {
+class InMemoryIndex;
+}
+
+namespace snowseek::storage {
+struct IndexFileStats;
+}
+
 namespace snowseek::storage::detail {
+
+/**
+ * @brief Serializes one index after enforcing a maximum output file size.
+ * @param path Destination Segment path whose parent already exists.
+ * @param documents Documents in contiguous identifier order.
+ * @param index Positional inverted index to encode.
+ * @param maximum_file_size Maximum bytes the completed Segment may occupy.
+ * @return Physical and logical statistics for the written Segment.
+ * @throws std::runtime_error If encoding fails, the size limit or available
+ * filesystem space is insufficient, or the output cannot be written.
+ */
+[[nodiscard]] IndexFileStats
+write_index_file_bounded(const std::filesystem::path &path,
+                         const document::DocumentStore &documents,
+                         const index::InMemoryIndex &index,
+                         std::uint64_t maximum_file_size);
 
 /**
  * @brief Opens an independent binary stream for Segment random access.
@@ -88,11 +116,10 @@ inline void read_exact(std::istream &input, char *data, std::size_t size) {
                         if (byte < 0x80U || byte > 0xbfU) {
                                 return false;
                         }
-                        if (offset == 1 &&
-                            ((first == 0xe0U && byte < 0xa0U) ||
-                             (first == 0xedU && byte > 0x9fU) ||
-                             (first == 0xf0U && byte < 0x90U) ||
-                             (first == 0xf4U && byte > 0x8fU))) {
+                        if (offset == 1 && ((first == 0xe0U && byte < 0xa0U) ||
+                                            (first == 0xedU && byte > 0x9fU) ||
+                                            (first == 0xf0U && byte < 0x90U) ||
+                                            (first == 0xf4U && byte > 0x8fU))) {
                                 return false;
                         }
                 }
