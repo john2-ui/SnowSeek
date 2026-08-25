@@ -268,11 +268,9 @@ void walk_terms(const std::vector<SegmentSource> &sources, Consumer consumer) {
                 }
                 return left > right;
         };
-        std::vector<std::size_t> heap_storage;
-        heap_storage.reserve(cursors.size());
         std::priority_queue<std::size_t, std::vector<std::size_t>,
                             decltype(compare)>
-                heap(compare, std::move(heap_storage));
+                heap(compare);
         for (std::size_t index = 0; index < cursors.size(); ++index) {
                 if (cursors[index].valid()) {
                         heap.push(index);
