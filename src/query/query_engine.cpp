@@ -56,8 +56,8 @@ struct SnippetReady final {};
  * @param postings Source posting list.
  * @return Strictly increasing document identifiers.
  */
-[[nodiscard]] DocumentIds posting_document_ids(
-        const index::PostingList &postings) {
+[[nodiscard]] DocumentIds
+posting_document_ids(const index::PostingList &postings) {
         DocumentIds result;
         result.reserve(postings.size());
         for (const auto &posting : postings) {
@@ -76,8 +76,8 @@ struct SnippetReady final {};
                                         const DocumentIds &right) {
         DocumentIds result;
         result.reserve(std::min(left.size(), right.size()));
-        std::set_intersection(left.begin(), left.end(), right.begin(), right.end(),
-                              std::back_inserter(result));
+        std::set_intersection(left.begin(), left.end(), right.begin(),
+                              right.end(), std::back_inserter(result));
         return result;
 }
 
@@ -118,15 +118,15 @@ struct SnippetReady final {};
  * @param document_id Identifier to locate.
  * @return Pointer to the posting, or nullptr when absent.
  */
-[[nodiscard]] const index::Posting *find_posting(
-        const index::PostingList &postings,
-        document::DocumentId document_id) {
-        const auto iterator = std::lower_bound(
-                postings.begin(), postings.end(), document_id,
-                [](const index::Posting &posting,
-                   document::DocumentId candidate) {
-                        return posting.document_id < candidate;
-                });
+[[nodiscard]] const index::Posting *
+find_posting(const index::PostingList &postings,
+             document::DocumentId document_id) {
+        const auto iterator =
+                std::lower_bound(postings.begin(), postings.end(), document_id,
+                                 [](const index::Posting &posting,
+                                    document::DocumentId candidate) {
+                                         return posting.document_id < candidate;
+                                 });
         return iterator == postings.end() ||
                                iterator->document_id != document_id
                        ? nullptr
@@ -139,9 +139,9 @@ struct SnippetReady final {};
  * @param document_id Candidate document identifier.
  * @return True when at least one exact phrase occurrence exists.
  */
-[[nodiscard]] bool phrase_matches(
-        const std::vector<const index::PostingList *> &postings,
-        document::DocumentId document_id) {
+[[nodiscard]] bool
+phrase_matches(const std::vector<const index::PostingList *> &postings,
+               document::DocumentId document_id) {
         std::vector<const index::Posting *> document_postings;
         document_postings.reserve(postings.size());
         for (const auto *posting_list : postings) {
@@ -164,12 +164,11 @@ struct SnippetReady final {};
                         }
                         const auto expected = static_cast<index::Position>(
                                 start + term_index);
-                        if (!std::binary_search(
-                                    document_postings[term_index]
-                                            ->positions.begin(),
-                                    document_postings[term_index]
-                                            ->positions.end(),
-                                    expected)) {
+                        if (!std::binary_search(document_postings[term_index]
+                                                        ->positions.begin(),
+                                                document_postings[term_index]
+                                                        ->positions.end(),
+                                                expected)) {
                                 complete = false;
                                 break;
                         }
@@ -250,6 +249,11 @@ class Evaluator {
         /** @brief Evaluates an exact phrase using posting positions. */
         [[nodiscard]] DocumentIds
         evaluate_phrase(const std::vector<std::string> &terms) const {
+                if (!index_.stores_positions()) {
+                        throw std::invalid_argument(
+                                "index does not contain positions required for "
+                                "phrase queries");
+                }
                 std::vector<const index::PostingList *> posting_lists;
                 posting_lists.reserve(terms.size());
                 for (const auto &term : terms) {
@@ -319,7 +323,8 @@ class Evaluator {
                 return matches;
         }
 
-        /** @brief Evaluates flattened AND operands from most selective first. */
+        /** @brief Evaluates flattened AND operands from most selective first.
+         */
         [[nodiscard]] DocumentIds
         evaluate_conjunction(const QueryNode &node) const {
                 std::vector<const QueryNode *> operands;
@@ -359,16 +364,15 @@ class Evaluator {
                 case QueryNodeKind::conjunction:
                         return std::min(estimate(*node.left),
                                         estimate(*node.right));
-                case QueryNodeKind::disjunction:
-                        {
-                                const auto left = estimate(*node.left);
-                                const auto right = estimate(*node.right);
-                                if (left >= documents_.size() ||
-                                    right > documents_.size() - left) {
-                                        return documents_.size();
-                                }
-                                return left + right;
+                case QueryNodeKind::disjunction: {
+                        const auto left = estimate(*node.left);
+                        const auto right = estimate(*node.right);
+                        if (left >= documents_.size() ||
+                            right > documents_.size() - left) {
+                                return documents_.size();
                         }
+                        return left + right;
+                }
                 case QueryNodeKind::path_filter:
                 case QueryNodeKind::extension_filter:
                 case QueryNodeKind::negation:
@@ -421,8 +425,8 @@ void collect_positive_terms(const QueryNode &node, bool negated,
  * @param documents Corpus document table.
  * @return Mean token count, or zero for an empty corpus.
  */
-[[nodiscard]] double average_document_length(
-        const document::DocumentStore &documents) {
+[[nodiscard]] double
+average_document_length(const document::DocumentStore &documents) {
         if (documents.size() == 0) {
                 return 0.0;
         }
@@ -459,12 +463,12 @@ void collect_positive_terms(const QueryNode &node, bool negated,
  * @param explanation Optional output vector for score contributions.
  * @return Sum of BM25 contributions for present terms.
  */
-[[nodiscard]] double score_document(
-        const document::DocumentStore &documents,
-        const index::InMemoryIndex &index,
-        document::DocumentId document_id,
-        const std::vector<std::string> &terms, double corpus_average,
-        std::vector<ScoreContribution> *explanation) {
+[[nodiscard]] double
+score_document(const document::DocumentStore &documents,
+               const index::InMemoryIndex &index,
+               document::DocumentId document_id,
+               const std::vector<std::string> &terms, double corpus_average,
+               std::vector<ScoreContribution> *explanation) {
         const auto document_count =
                 checked_count(documents.size(), "document count");
         const auto document_length = documents.get(document_id).token_count;
@@ -523,9 +527,9 @@ struct BetterRankComparator {
         if (path.empty() || path.is_absolute()) {
                 return false;
         }
-        return std::none_of(path.begin(), path.end(), [](const auto &component) {
-                return component == "..";
-        });
+        return std::none_of(
+                path.begin(), path.end(),
+                [](const auto &component) { return component == ".."; });
 }
 
 /**
@@ -577,10 +581,9 @@ struct BetterRankComparator {
  * @param terms Sorted positive terms used to choose a line.
  * @return One-based line and snippet, or an empty value when unavailable.
  */
-[[nodiscard]] Snippet load_snippet(
-        const std::filesystem::path &source_root,
-        const std::filesystem::path &relative_path,
-        const std::vector<std::string> &terms) {
+[[nodiscard]] Snippet load_snippet(const std::filesystem::path &source_root,
+                                   const std::filesystem::path &relative_path,
+                                   const std::vector<std::string> &terms) {
         if (!is_safe_relative_path(relative_path)) {
                 return {};
         }
@@ -596,7 +599,8 @@ struct BetterRankComparator {
                         [&](std::string_view chunk) {
                                 for (const char character : chunk) {
                                         if (character != '\n') {
-                                                pending_line.push_back(character);
+                                                pending_line.push_back(
+                                                        character);
                                                 continue;
                                         }
                                         if (!pending_line.empty() &&
@@ -642,8 +646,8 @@ QueryEngine::search(std::string_view expression,
         }
         if (!options.source_root.empty()) {
                 std::error_code error;
-                const bool directory =
-                        std::filesystem::is_directory(options.source_root, error);
+                const bool directory = std::filesystem::is_directory(
+                        options.source_root, error);
                 if (error || !directory) {
                         throw std::invalid_argument(
                                 "source root is not a readable directory");
@@ -712,9 +716,9 @@ QueryEngine::search(std::string_view expression,
                                 corpus_average, &result.explanation));
                 }
                 if (!options.source_root.empty()) {
-                        auto snippet = load_snippet(options.source_root,
-                                                    document.path,
-                                                    positive_terms);
+                        auto snippet =
+                                load_snippet(options.source_root, document.path,
+                                             positive_terms);
                         result.line = snippet.line;
                         result.snippet = std::move(snippet.text);
                 }

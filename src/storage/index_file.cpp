@@ -129,23 +129,33 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                         document_frequency, posting_offset, posting_length});
                 for (const auto &posting : *postings) {
                         const auto frequency = posting.term_frequency();
-                        if (frequency == 0) {
+                        if (frequency == 0 ||
+                            (index.stores_positions() &&
+                             posting.positions.size() != frequency) ||
+                            (!index.stores_positions() &&
+                             !posting.positions.empty())) {
                                 throw std::runtime_error(
-                                        "posting term frequency is zero");
+                                        "posting frequency and positions "
+                                        "mismatch");
                         }
                         write_u32_le(postings_stream, posting.document_id);
                         write_u32_le(postings_stream, frequency);
                         write_u64_le(postings_stream, position_offset);
-                        for (const auto position : posting.positions) {
-                                write_u32_le(positions_stream, position);
+                        if (index.stores_positions()) {
+                                for (const auto position : posting.positions) {
+                                        write_u32_le(positions_stream,
+                                                     position);
+                                }
+                                position_offset = checked_add(
+                                        position_offset,
+                                        checked_multiply(
+                                                frequency, 4,
+                                                "position byte length"),
+                                        "positions section length");
+                                position_count =
+                                        checked_add(position_count, frequency,
+                                                    "position count");
                         }
-                        position_offset = checked_add(
-                                position_offset,
-                                checked_multiply(frequency, 4,
-                                                 "position byte length"),
-                                "positions section length");
-                        position_count = checked_add(position_count, frequency,
-                                                     "position count");
                 }
                 posting_offset = checked_add(posting_offset, posting_length,
                                              "postings section length");
@@ -183,6 +193,7 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                 finish(terms_stream), finish(postings_stream),
                 finish(positions_stream)};
         IndexHeader header;
+        header.feature_flags = index.stores_positions() ? kFeaturePositions : 0;
         std::uint64_t offset = kIndexHeaderSize;
         for (std::size_t section_index = 0; section_index < sections.size();
              ++section_index) {

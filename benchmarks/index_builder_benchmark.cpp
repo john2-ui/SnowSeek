@@ -28,7 +28,39 @@ struct BenchmarkOptions {
         std::uint64_t files = 1024;
         std::uint64_t bytes_per_file = 64U * 1024U;
         std::uint64_t vocabulary = 4096;
+        snowseek::index::ResourceProfile profile{
+                snowseek::index::ResourceProfile::balanced};
 };
+
+/** @brief Parses an exact benchmark resource profile. */
+[[nodiscard]] snowseek::index::ResourceProfile
+parse_profile(std::string_view text) {
+        if (text == "minimal") {
+                return snowseek::index::ResourceProfile::minimal;
+        }
+        if (text == "balanced") {
+                return snowseek::index::ResourceProfile::balanced;
+        }
+        if (text == "performance") {
+                return snowseek::index::ResourceProfile::performance;
+        }
+        throw std::invalid_argument(
+                "--profile requires minimal, balanced, or performance");
+}
+
+/** @brief Returns the stable benchmark spelling of a resource profile. */
+[[nodiscard]] std::string_view
+profile_name(snowseek::index::ResourceProfile profile) noexcept {
+        switch (profile) {
+        case snowseek::index::ResourceProfile::minimal:
+                return "minimal";
+        case snowseek::index::ResourceProfile::balanced:
+                return "balanced";
+        case snowseek::index::ResourceProfile::performance:
+                return "performance";
+        }
+        return "balanced";
+}
 
 class TemporaryDirectory {
       public:
@@ -98,6 +130,7 @@ class TemporaryDirectory {
         bool has_files = false;
         bool has_bytes = false;
         bool has_vocabulary = false;
+        bool has_profile = false;
         for (int index = 1; index < argc; ++index) {
                 const std::string_view option(argv[index]);
                 if (index + 1 >= argc) {
@@ -115,9 +148,12 @@ class TemporaryDirectory {
                         options.vocabulary =
                                 parse_positive(argv[++index], option);
                         has_vocabulary = true;
+                } else if (option == "--profile" && !has_profile) {
+                        options.profile = parse_profile(argv[++index]);
+                        has_profile = true;
                 } else if (option == "--files" ||
                            option == "--bytes-per-file" ||
-                           option == "--vocabulary") {
+                           option == "--vocabulary" || option == "--profile") {
                         throw std::invalid_argument(std::string(option) +
                                                     " may appear only once");
                 } else {
@@ -236,8 +272,10 @@ int run(const BenchmarkOptions &options) {
         generate_corpus(source, options);
         const auto rss_before = peak_rss_bytes();
         const auto started_at = std::chrono::steady_clock::now();
-        const auto result =
-                snowseek::index::IndexBuilder{}.build(source, destination);
+        const auto build_options =
+                snowseek::index::persistent_build_options(options.profile);
+        const auto result = snowseek::index::IndexBuilder(build_options)
+                                    .build(source, destination);
         const auto elapsed =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - started_at);
@@ -254,6 +292,8 @@ int run(const BenchmarkOptions &options) {
                                                     elapsed_seconds;
 
         std::cout << "files=" << options.files << '\n'
+                  << "resource_profile=" << profile_name(options.profile)
+                  << '\n'
                   << "bytes_per_file=" << options.bytes_per_file << '\n'
                   << "vocabulary=" << options.vocabulary << '\n'
                   << "source_bytes=" << source_bytes << '\n'
@@ -263,11 +303,10 @@ int run(const BenchmarkOptions &options) {
                   << std::setprecision(3) << throughput << '\n'
                   << "index_bytes=" << index_bytes << '\n'
                   << "segment_flush_threshold_bytes="
-                  << snowseek::index::kDefaultSegmentFlushThresholdBytes << '\n'
+                  << build_options.segment_flush_threshold_bytes << '\n'
                   << "temporary_segment_count="
                   << result.temporary_segment_count << '\n'
-                  << "merge_fan_in=" << snowseek::index::kDefaultMergeFanIn
-                  << '\n'
+                  << "merge_fan_in=" << build_options.merge_fan_in << '\n'
                   << "merge_pass_count=" << result.merge_pass_count << '\n'
                   << "temporary_peak_bytes=" << result.temporary_peak_bytes
                   << '\n'
@@ -283,6 +322,11 @@ int run(const BenchmarkOptions &options) {
                   << result.stats.memory.posting_bytes << '\n'
                   << "memory_estimated_peak_bytes="
                   << result.stats.memory.estimated_peak_bytes << '\n'
+                  << "memory_limit_bytes=" << build_options.memory_budget_bytes
+                  << '\n'
+                  << "memory_peak_bytes=" << result.memory_peak_bytes << '\n'
+                  << "threads=" << result.worker_thread_count << '\n'
+                  << "positions_enabled=" << result.positions_enabled << '\n'
                   << "rss_before_build_bytes=" << rss_before << '\n'
                   << "rss_peak_bytes=" << rss_peak << '\n'
                   << "rss_increment_bytes="

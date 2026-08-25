@@ -376,6 +376,29 @@ void counts_failed_document_buffers() {
 
 /** @brief Verifies persistent builder resource limits. */
 void validates_persistent_resource_options() {
+        const auto defaults = snowseek::index::PersistentBuildOptions{};
+        const auto balanced = snowseek::index::persistent_build_options(
+                snowseek::index::ResourceProfile::balanced);
+        snowseek::test::require_equal(
+                defaults.memory_budget_bytes, balanced.memory_budget_bytes,
+                "default options should use the Balanced memory budget");
+        const auto minimal = snowseek::index::persistent_build_options(
+                snowseek::index::ResourceProfile::minimal);
+        snowseek::test::require_equal(
+                minimal.memory_budget_bytes, 128ULL * 1024ULL * 1024ULL,
+                "Minimal should use a 128 MiB memory budget");
+        snowseek::test::require_equal(minimal.worker_thread_count,
+                                      std::size_t{1},
+                                      "Minimal should be single-threaded");
+        snowseek::test::require(!minimal.in_memory_options.store_positions,
+                                "Minimal should disable positions");
+        const auto performance = snowseek::index::persistent_build_options(
+                snowseek::index::ResourceProfile::performance);
+        snowseek::test::require(
+                performance.worker_thread_count >= 1 &&
+                        performance.merge_fan_in == 32,
+                "Performance should use detected threads and fan-in 32");
+
         snowseek::index::PersistentBuildOptions options;
         options.segment_flush_threshold_bytes = 0;
         snowseek::test::require_throws<std::invalid_argument>(
@@ -407,6 +430,23 @@ void validates_persistent_resource_options() {
 
         options.merge_fan_in = 2;
         static_cast<void>(snowseek::index::IndexBuilder(options));
+
+        options = {};
+        options.memory_budget_bytes = 0;
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
+                },
+                "a zero memory budget should be rejected");
+        options = {};
+        options.worker_thread_count = 0;
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
+                },
+                "a zero worker count should be rejected");
 }
 
 /** @brief Verifies bounded multi-level output matches a single-batch build. */
@@ -425,12 +465,14 @@ void merges_multiple_levels_byte_for_byte() {
         snowseek::index::PersistentBuildOptions single_options;
         single_options.segment_flush_threshold_bytes =
                 std::numeric_limits<std::uint64_t>::max();
+        single_options.worker_thread_count = 1;
         const auto single = snowseek::index::IndexBuilder(single_options)
                                     .build(source, single_directory);
 
         snowseek::index::PersistentBuildOptions merged_options;
         merged_options.segment_flush_threshold_bytes = 1;
         merged_options.merge_fan_in = 2;
+        merged_options.worker_thread_count = 4;
         const auto merged = snowseek::index::IndexBuilder(merged_options)
                                     .build(source, merged_directory);
 
@@ -445,7 +487,12 @@ void merges_multiple_levels_byte_for_byte() {
                 "five Segments with fan-in two should require three levels");
         snowseek::test::require_equal(
                 read_file(single.index_file), read_file(merged.index_file),
-                "K-way merge should reproduce single-batch v1 bytes");
+                "parallel K-way merge should reproduce serial v1 bytes");
+        snowseek::test::require(
+                merged.memory_peak_bytes > 0 &&
+                        merged.memory_peak_bytes <=
+                                merged_options.memory_budget_bytes,
+                "parallel logical memory should remain within budget");
         const auto loaded =
                 snowseek::storage::read_index_file(merged.index_file);
         const auto *shared = loaded.index.find("shared");
@@ -464,6 +511,82 @@ void merges_multiple_levels_byte_for_byte() {
         snowseek::test::require_equal(
                 published_entries, std::size_t{1},
                 "successful publication should clean every workspace file");
+}
+
+/** @brief Verifies logical memory failures preserve published output. */
+void enforces_logical_memory_budget() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha beta gamma");
+
+        auto allowed_options = snowseek::index::PersistentBuildOptions{};
+        allowed_options.memory_budget_bytes = 1ULL << 20U;
+        const auto allowed = snowseek::index::IndexBuilder(allowed_options)
+                                     .build(source, destination);
+        snowseek::test::require(
+                allowed.memory_peak_bytes > 0 &&
+                        allowed.memory_peak_bytes <= (1ULL << 20U),
+                "a successful build should report an in-budget memory peak");
+        const auto published_before = read_file(allowed.index_file);
+
+        auto denied_options = snowseek::index::PersistentBuildOptions{};
+        denied_options.memory_budget_bytes = 1;
+        bool diagnosed = false;
+        try {
+                static_cast<void>(snowseek::index::IndexBuilder(denied_options)
+                                          .build(source, destination));
+        } catch (const std::runtime_error &error) {
+                diagnosed = std::string(error.what())
+                                    .find("memory limit exceeded") !=
+                            std::string::npos;
+        }
+        snowseek::test::require(diagnosed,
+                                "an undersized memory budget should fail");
+        snowseek::test::require_equal(
+                read_file(allowed.index_file), published_before,
+                "a memory failure should preserve the published Segment");
+        snowseek::test::require_equal(
+                static_cast<std::size_t>(std::distance(
+                        std::filesystem::directory_iterator(destination),
+                        std::filesystem::directory_iterator{})),
+                std::size_t{1},
+                "a memory failure should clean its private workspace");
+}
+
+/** @brief Verifies positionless multi-level output remains deterministic. */
+void merges_positionless_segments() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        std::filesystem::create_directory(source);
+        for (const auto name : {"a.txt", "b.txt", "c.txt", "d.txt", "e.txt"}) {
+                write_file(source / name, "alpha shared alpha");
+        }
+        auto single_options = snowseek::index::persistent_build_options(
+                snowseek::index::ResourceProfile::minimal);
+        single_options.segment_flush_threshold_bytes =
+                std::numeric_limits<std::uint64_t>::max();
+        const auto single = snowseek::index::IndexBuilder(single_options)
+                                    .build(source, temporary.path() / "single");
+        auto merged_options = single_options;
+        merged_options.segment_flush_threshold_bytes = 1;
+        merged_options.merge_fan_in = 2;
+        const auto merged = snowseek::index::IndexBuilder(merged_options)
+                                    .build(source, temporary.path() / "merged");
+        snowseek::test::require_equal(
+                read_file(single.index_file), read_file(merged.index_file),
+                "positionless multi-level bytes should match one batch");
+        const auto loaded =
+                snowseek::storage::read_index_file(merged.index_file);
+        const auto *alpha = loaded.index.find("alpha");
+        snowseek::test::require(!loaded.index.stores_positions() &&
+                                        loaded.stats.position_count == 0 &&
+                                        alpha != nullptr &&
+                                        (*alpha)[0].term_frequency() == 2 &&
+                                        (*alpha)[0].positions.empty(),
+                                "positionless indexes should retain frequency "
+                                "without positions");
 }
 
 /** @brief Verifies hard temporary-space limits preserve published output. */
@@ -606,6 +729,9 @@ int main() {
                  merges_multiple_levels_byte_for_byte},
                 {"enforces temporary space budget",
                  enforces_temporary_space_budget},
+                {"enforces logical memory budget",
+                 enforces_logical_memory_budget},
+                {"merges positionless Segments", merges_positionless_segments},
                 {"handles empty and oversized batches",
                  handles_empty_and_oversized_batches},
                 {"cleans workspace after publication failure",

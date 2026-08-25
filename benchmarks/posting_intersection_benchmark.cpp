@@ -21,7 +21,7 @@ make_postings(std::size_t count, snowseek::document::DocumentId step) {
                 const auto document_id =
                         static_cast<snowseek::document::DocumentId>(
                                 index * static_cast<std::size_t>(step));
-                postings.push_back({document_id, {0}});
+                postings.push_back({document_id, 1, {0}});
         }
         return postings;
 }

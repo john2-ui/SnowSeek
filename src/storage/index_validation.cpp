@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace snowseek::storage {
@@ -38,8 +39,7 @@ using detail::seek_to;
  * @param section Validated section descriptor.
  * @throws std::runtime_error If reading fails or the checksum differs.
  */
-void validate_checksum(std::istream &input,
-                       const SectionDescriptor &section) {
+void validate_checksum(std::istream &input, const SectionDescriptor &section) {
         seek_to(input, section.offset);
         Crc32c checksum;
         std::array<char, kChecksumBufferSize> buffer{};
@@ -93,6 +93,11 @@ parse_index_file(const std::filesystem::path &path,
                  index::InMemoryIndex *loaded_index) {
         auto header_input = open_input(path);
         const auto header = read_header(header_input);
+        const bool has_positions =
+                (header.feature_flags & kFeaturePositions) != 0;
+        if (loaded_index != nullptr) {
+                *loaded_index = index::InMemoryIndex(has_positions);
+        }
         std::error_code size_error;
         const auto file_size = std::filesystem::file_size(path, size_error);
         if (size_error || file_size != header.file_size) {
@@ -110,8 +115,9 @@ parse_index_file(const std::filesystem::path &path,
         seek_to(documents_input, header.sections[0].offset);
         const auto document_count = read_u64_le(documents_input);
         const auto expected_documents_size = checked_add(
-                8, checked_multiply(document_count, kDocumentRecordSize,
-                                    "documents section length"),
+                8,
+                checked_multiply(document_count, kDocumentRecordSize,
+                                 "documents section length"),
                 "documents section length");
         if (header.sections[0].length != expected_documents_size) {
                 throw std::runtime_error(
@@ -126,8 +132,8 @@ parse_index_file(const std::filesystem::path &path,
         remaining_token_counts.reserve(
                 static_cast<std::size_t>(document_count));
         std::uint64_t expected_path_offset = 0;
-        for (std::uint64_t document_index = 0;
-             document_index < document_count; ++document_index) {
+        for (std::uint64_t document_index = 0; document_index < document_count;
+             ++document_index) {
                 const auto document_id = read_u32_le(documents_input);
                 const auto path_length = read_u32_le(documents_input);
                 const auto path_offset = read_u64_le(documents_input);
@@ -146,13 +152,12 @@ parse_index_file(const std::filesystem::path &path,
                                 "document path exceeds Paths section");
                 }
                 std::string path_bytes(path_length, '\0');
-                seek_to(paths_input,
-                        checked_add(header.sections[1].offset, path_offset,
-                                    "path offset"));
+                seek_to(paths_input, checked_add(header.sections[1].offset,
+                                                 path_offset, "path offset"));
                 read_exact(paths_input, path_bytes.data(), path_bytes.size());
                 if (!detail::is_valid_utf8(path_bytes)) {
-                        throw std::runtime_error(
-                                "stored document path is not valid nonempty UTF-8");
+                        throw std::runtime_error("stored document path is not "
+                                                 "valid nonempty UTF-8");
                 }
                 if (documents != nullptr) {
                         const auto id = documents->add(
@@ -175,10 +180,11 @@ parse_index_file(const std::filesystem::path &path,
         auto positions_input = open_input(path);
         seek_to(terms_input, header.sections[2].offset);
         const auto term_count = read_u64_le(terms_input);
-        const auto term_bytes_begin = checked_add(
-                8, checked_multiply(term_count, kTermRecordSize,
-                                    "term table length"),
-                "term byte offset");
+        const auto term_bytes_begin =
+                checked_add(8,
+                            checked_multiply(term_count, kTermRecordSize,
+                                             "term table length"),
+                            "term byte offset");
         if (term_bytes_begin > header.sections[2].length) {
                 throw std::runtime_error("term table exceeds Terms section");
         }
@@ -209,10 +215,9 @@ parse_index_file(const std::filesystem::path &path,
                                     "term offset"));
                 read_exact(term_bytes_input, term.data(), term.size());
                 if ((!previous_term.empty() && term <= previous_term) ||
-                    !std::all_of(term.begin(), term.end(),
-                                 [](unsigned char byte) {
-                                         return byte < 0x80U;
-                                 })) {
+                    !std::all_of(
+                            term.begin(), term.end(),
+                            [](unsigned char byte) { return byte < 0x80U; })) {
                         throw std::runtime_error(
                                 "terms are not strictly sorted ASCII bytes");
                 }
@@ -222,10 +227,9 @@ parse_index_file(const std::filesystem::path &path,
 
                 if (document_frequency == 0 ||
                     posting_offset != expected_posting_offset ||
-                    posting_length != checked_multiply(
-                                              document_frequency,
-                                              kPostingRecordSize,
-                                              "posting length") ||
+                    posting_length != checked_multiply(document_frequency,
+                                                       kPostingRecordSize,
+                                                       "posting length") ||
                     posting_offset > header.sections[3].length ||
                     posting_length >
                             header.sections[3].length - posting_offset) {
@@ -242,54 +246,67 @@ parse_index_file(const std::filesystem::path &path,
                         if (document_id >= document_count || frequency == 0 ||
                             (!first_document &&
                              document_id <= previous_document) ||
-                            position_offset != expected_position_offset) {
+                            (has_positions &&
+                             position_offset != expected_position_offset) ||
+                            (!has_positions && position_offset != 0)) {
                                 throw std::runtime_error(
                                         "invalid posting record ordering");
                         }
                         first_document = false;
                         previous_document = document_id;
+                        std::vector<index::Position> positions;
+                        if (has_positions) {
+                                positions.reserve(frequency);
+                        }
                         std::uint32_t previous_position = 0;
                         for (std::uint32_t position_index = 0;
-                             position_index < frequency; ++position_index) {
+                             has_positions && position_index < frequency;
+                             ++position_index) {
                                 const auto position =
                                         read_u32_le(positions_input);
                                 if (position_index != 0 &&
                                     position <= previous_position) {
                                         throw std::runtime_error(
-                                                "posting positions are not increasing");
+                                                "posting positions are not "
+                                                "increasing");
                                 }
-                                if (loaded_index != nullptr) {
-                                        loaded_index->add_occurrence(
-                                                previous_term, document_id,
-                                                position);
-                                }
+                                positions.push_back(position);
                                 previous_position = position;
                         }
-                        const auto position_length = checked_multiply(
-                                frequency, 4, "position range length");
-                        expected_position_offset = checked_add(
-                                expected_position_offset, position_length,
-                                "position offset");
+                        if (loaded_index != nullptr) {
+                                loaded_index->add_posting(
+                                        previous_term, document_id, frequency,
+                                        std::move(positions));
+                        }
+                        if (has_positions) {
+                                const auto position_length = checked_multiply(
+                                        frequency, 4, "position range length");
+                                expected_position_offset = checked_add(
+                                        expected_position_offset,
+                                        position_length, "position offset");
+                        }
                         if (expected_position_offset >
                             header.sections[4].length) {
                                 throw std::runtime_error(
                                         "posting positions exceed section");
                         }
-                        if (frequency >
-                            remaining_token_counts[document_id]) {
+                        if (frequency > remaining_token_counts[document_id]) {
                                 throw std::runtime_error(
-                                        "document token count does not match postings");
+                                        "document token count does not match "
+                                        "postings");
                         }
                         remaining_token_counts[document_id] -= frequency;
-                        stats.posting_count = checked_add(
-                                stats.posting_count, 1, "posting count");
-                        stats.position_count = checked_add(
-                                stats.position_count, frequency,
-                                "position count");
+                        stats.posting_count = checked_add(stats.posting_count,
+                                                          1, "posting count");
+                        if (has_positions) {
+                                stats.position_count = checked_add(
+                                        stats.position_count, frequency,
+                                        "position count");
+                        }
                 }
-                expected_posting_offset = checked_add(
-                        expected_posting_offset, posting_length,
-                        "posting offset");
+                expected_posting_offset =
+                        checked_add(expected_posting_offset, posting_length,
+                                    "posting offset");
         }
         if (expected_term_offset != header.sections[2].length ||
             expected_posting_offset != header.sections[3].length ||

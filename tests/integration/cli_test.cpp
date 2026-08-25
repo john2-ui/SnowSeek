@@ -103,8 +103,10 @@ void runs_index_query_stats_and_verify() {
              {"memory_metadata_bytes=", "memory_reader_peak_bytes=",
               "memory_token_peak_bytes=", "memory_dictionary_bytes=",
               "memory_posting_bytes=", "memory_estimated_peak_bytes=",
-              "temporary_segment_count=", "temporary_peak_bytes=",
-              "merge_pass_count="}) {
+              "resource_profile=balanced",
+              "memory_limit_bytes=", "memory_peak_bytes=", "threads=2",
+              "positions_enabled=1", "temporary_segment_count=",
+              "temporary_peak_bytes=", "merge_pass_count="}) {
                 snowseek::test::require(
                         index.output.find(key) != std::string::npos,
                         "index output should expose " + std::string(key));
@@ -139,12 +141,25 @@ void parses_index_resource_options() {
         std::filesystem::create_directory(source);
         write_file(source / "a.txt", "alpha beta");
 
+        const auto overridden = invoke_captured(
+                {"snowseek", "index", source.string(), "--threads", "2",
+                 "--merge-fan-in", "2", "--temporary-space-limit", "1MiB",
+                 "--memory-limit", "1MiB", "--index",
+                 first_destination.string(), "--profile", "minimal"});
         snowseek::test::require_equal(
-                invoke({"snowseek", "index", source.string(), "--merge-fan-in",
-                        "2", "--temporary-space-limit", "1MiB", "--index",
-                        first_destination.string()}),
-                0,
+                overridden.status, 0,
                 "index options should allow arbitrary ordering and IEC sizes");
+        snowseek::test::require(
+                overridden.output.find("resource_profile=minimal") !=
+                                std::string::npos &&
+                        overridden.output.find("memory_limit_bytes=1048576") !=
+                                std::string::npos &&
+                        overridden.output.find("threads=2") !=
+                                std::string::npos &&
+                        overridden.output.find("positions_enabled=0") !=
+                                std::string::npos,
+                "explicit limits should override a profile independent of "
+                "order");
         snowseek::test::require_equal(
                 invoke({"snowseek", "index", source.string(), "--index",
                         second_destination.string(), "--temporary-space-limit",
@@ -158,6 +173,14 @@ void parses_index_resource_options() {
                                 "--temporary-space-limit", std::string(limit)}),
                         0, "every documented size suffix should be accepted");
         }
+        for (const std::string_view profile :
+             {"minimal", "balanced", "performance"}) {
+                snowseek::test::require_equal(
+                        invoke({"snowseek", "index", source.string(), "--index",
+                                second_destination.string(), "--profile",
+                                std::string(profile)}),
+                        0, "every resource profile should be accepted");
+        }
 
         for (const std::vector<std::string> &arguments :
              {std::vector<std::string>{"snowseek", "index", source.string(),
@@ -170,6 +193,15 @@ void parses_index_resource_options() {
                "18446744073709551615TiB"},
               {"snowseek", "index", source.string(), "--index",
                first_destination.string(), "--merge-fan-in", "1"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--memory-limit", "0"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--threads", "0"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--profile", "Minimal"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--profile", "minimal", "--profile",
+               "balanced"},
               {"snowseek", "index", source.string(), "--index",
                first_destination.string(), "--merge-fan-in", "2",
                "--merge-fan-in", "3"},
@@ -190,6 +222,10 @@ void parses_index_resource_options() {
                         denied_destination.string(), "--temporary-space-limit",
                         "1B"}),
                 1, "an insufficient CLI budget should fail before publication");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "index", source.string(), "--index",
+                        denied_destination.string(), "--memory-limit", "1B"}),
+                1, "an insufficient memory budget should fail publication");
 }
 
 /** @brief Verifies JSONL and paths-only presentation modes. */

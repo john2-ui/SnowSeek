@@ -12,6 +12,8 @@
 `getrusage(RUSAGE_SELF)` 独立读取；`rss_increment_bytes` 是构建后进程峰值与构建前
 已有峰值之差。`temporary_peak_bytes` 是私有工作区内初始 Segment、中间 Segment、
 spool 和候选文件同时存在时的逻辑长度峰值，不等同于文件系统已分配块数。
+`memory_peak_bytes` 是线程安全预算账本实际接受过的最大并发分类 reservation；它不
+统计 allocator、线程栈、运行库、内核页和 writer 序列化缓冲，因此不是 RSS 配额。
 
 ## 复现
 
@@ -21,11 +23,14 @@ cmake -S . -B build-memory-baseline -DCMAKE_BUILD_TYPE=Release \
   -DSNOWSEEK_WARNINGS_AS_ERRORS=ON
 cmake --build build-memory-baseline --parallel 2
 ./build-memory-baseline/benchmarks/snowseek_index_builder_benchmark
+./build-memory-baseline/benchmarks/snowseek_index_builder_benchmark \
+  --profile minimal
 ```
 
 基准默认参数为 `--files 1024 --bytes-per-file 65536 --vocabulary 4096`，即
 64 MiB 输入。三个参数都必须为正整数；基准拒绝格式错误、零值、重复参数、语料总量
-乘法溢出以及超过默认扫描器单文件上限的文件大小。
+乘法溢出以及超过默认扫描器单文件上限的文件大小。`--profile` 接受 `minimal`、
+`balanced` 和 `performance`。
 
 ## 原单批次结果
 
@@ -91,8 +96,30 @@ cmake --build build-memory-baseline --parallel 2
 不替换上表 2026-08-23 的耗时和 RSS 记录。本次复测的最终索引大小和分类内存估算与
 原记录一致。
 
-结果只描述上述环境各一次测量。128 MiB 是文档提交后的活动容器容量阈值，不是 RSS
-硬上限；STL vector 扩容、单文档临时 Token、序列化缓冲和分配器开销都会造成超出。
-临时空间限制采用输入大小推导的保守预检，可能在高词项重复率下早于实际空间需求
-拒绝构建；结果仍只适用于所列环境，不能作为跨机器性能门槛。下一步将接入内存限制、
-线程和资源档位。
+## 资源档位结果
+
+- 日期：2026-08-24
+- 架构与编译器：x86_64，GCC 9.4.0
+- 构建：Release，warnings-as-errors
+- 参数：1024 文件 × 65536 bytes，词表 4096；每档独立进程测量
+
+| 指标 | Minimal | Balanced | Performance |
+|---|---:|---:|---:|
+| 线程 | 1 | 2 | 16 |
+| Position | 关闭 | 开启 | 开启 |
+| 内存预算 | 134,217,728 | 268,435,456 | 1,073,741,824 |
+| 逻辑内存峰值 | 36,395,022 | 153,295,562 | 201,987,618 |
+| RSS 峰值增量 | 62,836,736 | 284,086,272 | 462,254,080 |
+| 临时 Segment | 8 | 2 | 1 |
+| 归并层数 | 2 | 1 | 0 |
+| 临时空间峰值 | 202,166,326 | 284,662,138 | 94,831,768 |
+| 索引大小 | 67,333,164 | 94,831,768 | 94,831,768 |
+| 吞吐 MiB/s | 15.148 | 10.308 | 18.060 |
+
+三档的逻辑峰值均未突破预算。Balanced 的 RSS 增量比 256 MiB 逻辑预算高约 15 MiB，
+来自明确排除的线程栈、allocator 和序列化阶段等开销；Performance 同样不能把 1 GiB
+解释为进程配额。Minimal 因移除 Positions 缩小最终索引，但不再支持短语查询。
+
+结果只描述上述环境各一次测量。临时空间限制采用输入大小推导的保守预检，可能在高
+词项重复率下早于实际空间需求拒绝构建；这些数字不能作为跨机器性能门槛。下一步将
+补充自定义临时目录，并在 AArch64 上校准 RSS、吞吐和索引兼容性。

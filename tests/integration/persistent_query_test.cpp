@@ -43,7 +43,8 @@ class TemporaryDirectory {
 };
 
 /** @brief Writes a corpus text fixture. */
-void write_file(const std::filesystem::path &path, const std::string &contents) {
+void write_file(const std::filesystem::path &path,
+                const std::string &contents) {
         std::ofstream output(path, std::ios::binary);
         output << contents;
         if (!output) {
@@ -51,7 +52,8 @@ void write_file(const std::filesystem::path &path, const std::string &contents) 
         }
 }
 
-/** @brief Verifies build, reopen, ranking, explanation, and Top-K truncation. */
+/** @brief Verifies build, reopen, ranking, explanation, and Top-K truncation.
+ */
 void builds_reopens_and_queries() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
@@ -106,8 +108,9 @@ void evaluates_m3_query_language() {
         const snowseek::query::QueryEngine engine(destination);
 
         const auto phrase = engine.search("\"alpha beta\"");
-        snowseek::test::require_equal(phrase.size(), std::size_t{2},
-                                      "phrase should require adjacent positions");
+        snowseek::test::require_equal(
+                phrase.size(), std::size_t{2},
+                "phrase should require adjacent positions");
         snowseek::test::require_equal(
                 engine.search("\"alpha alpha\"").size(), std::size_t{0},
                 "nonadjacent repeated term should not match a phrase");
@@ -115,19 +118,42 @@ void evaluates_m3_query_language() {
                 engine.search("\"echo echo\"").size(), std::size_t{1},
                 "adjacent repeated term should match a phrase");
 
-        const auto boolean = engine.search(
-                "alpha AND (beta OR delta) AND NOT extension:md");
-        snowseek::test::require_equal(boolean.size(), std::size_t{2},
-                                      "Boolean expression should honor grouping");
+        const auto boolean =
+                engine.search("alpha AND (beta OR delta) AND NOT extension:md");
+        snowseek::test::require_equal(
+                boolean.size(), std::size_t{2},
+                "Boolean expression should honor grouping");
         const auto path = engine.search("path:sub/*");
         snowseek::test::require_equal(path.size(), std::size_t{2},
                                       "path Glob should match relative paths");
         const auto extension = engine.search("extension:.mD");
         snowseek::test::require_equal(extension.size(), std::size_t{1},
                                       "extension filter should ignore case");
-        snowseek::test::require_equal(extension[0].path,
-                                      std::filesystem::path("b.md"),
-                                      "extension filter should retain its path");
+        snowseek::test::require_equal(
+                extension[0].path, std::filesystem::path("b.md"),
+                "extension filter should retain its path");
+}
+
+/** @brief Verifies positionless indexes reject only phrase evaluation. */
+void rejects_phrases_without_positions() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha beta alpha");
+        const auto options = snowseek::index::persistent_build_options(
+                snowseek::index::ResourceProfile::minimal);
+        static_cast<void>(snowseek::index::IndexBuilder(options).build(
+                source, destination));
+        const snowseek::query::QueryEngine engine(destination);
+        snowseek::test::require_equal(
+                engine.search("alpha").size(), std::size_t{1},
+                "positionless indexes should support term scoring");
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&engine] {
+                        static_cast<void>(engine.search("\"alpha beta\""));
+                },
+                "positionless indexes should reject phrase queries");
 }
 
 /** @brief Verifies ranking is stable and score explanations sum exactly. */
@@ -141,8 +167,8 @@ void ranks_deterministically() {
         write_file(source / "c.txt", "filter only");
         snowseek::index::PersistentBuildOptions build_options;
         build_options.segment_flush_threshold_bytes = 1;
-        const auto build = snowseek::index::IndexBuilder(build_options).build(
-                source, destination);
+        const auto build = snowseek::index::IndexBuilder(build_options)
+                                   .build(source, destination);
         snowseek::test::require_equal(
                 build.temporary_segment_count, std::uint64_t{3},
                 "the ranking fixture should exercise K-way merge");
@@ -152,9 +178,9 @@ void ranks_deterministically() {
         options.top_k = 2;
         options.explain = true;
         const auto ranked = engine.search("alpha", options);
-        snowseek::test::require_equal(ranked[0].path,
-                                      std::filesystem::path("a.txt"),
-                                      "higher term frequency should rank first");
+        snowseek::test::require_equal(
+                ranked[0].path, std::filesystem::path("a.txt"),
+                "higher term frequency should rank first");
         snowseek::test::require(
                 std::abs(ranked[0].score - ranked[0].explanation[0].score) <
                         0.0000001,
@@ -164,9 +190,9 @@ void ranks_deterministically() {
         snowseek::test::require_equal(ties[0].path,
                                       std::filesystem::path("a.txt"),
                                       "zero-score ties should use path order");
-        snowseek::test::require_equal(ties[1].path,
-                                      std::filesystem::path("b.txt"),
-                                      "tie order should not depend on traversal");
+        snowseek::test::require_equal(
+                ties[1].path, std::filesystem::path("b.txt"),
+                "tie order should not depend on traversal");
 }
 
 /** @brief Verifies Top-K snippets and stale source handling. */
@@ -221,9 +247,7 @@ void rejects_invalid_queries_and_options() {
                 snowseek::index::IndexBuilder{}.build(source, destination));
         const snowseek::query::QueryEngine engine(destination);
         snowseek::test::require_throws<std::invalid_argument>(
-                [&engine] {
-                        static_cast<void>(engine.search("one two"));
-                },
+                [&engine] { static_cast<void>(engine.search("one two")); },
                 "implicit AND should be rejected");
         snowseek::query::SearchOptions excessive;
         excessive.top_k = snowseek::query::kMaxTopK + 1;
@@ -236,8 +260,7 @@ void rejects_invalid_queries_and_options() {
         missing_source.source_root = temporary.path() / "missing";
         snowseek::test::require_throws<std::invalid_argument>(
                 [&engine, &missing_source] {
-                        static_cast<void>(
-                                engine.search("one", missing_source));
+                        static_cast<void>(engine.search("one", missing_source));
                 },
                 "invalid source root should fail");
 }
@@ -260,9 +283,9 @@ void publishes_partial_index_with_diagnostics() {
         const auto matches = engine.search("safe");
         snowseek::test::require_equal(matches.size(), std::size_t{1},
                                       "successful documents should publish");
-        snowseek::test::require_equal(matches[0].path,
-                                      std::filesystem::path("a-valid.txt"),
-                                      "partial index paths should remain stable");
+        snowseek::test::require_equal(
+                matches[0].path, std::filesystem::path("a-valid.txt"),
+                "partial index paths should remain stable");
 }
 
 } // namespace
@@ -272,6 +295,8 @@ int main() {
         return snowseek::test::run({
                 {"builds, reopens, and queries", builds_reopens_and_queries},
                 {"evaluates M3 query language", evaluates_m3_query_language},
+                {"rejects phrases without positions",
+                 rejects_phrases_without_positions},
                 {"ranks deterministically", ranks_deterministically},
                 {"loads Top-K snippets", loads_top_k_snippets},
                 {"rejects invalid queries and options",

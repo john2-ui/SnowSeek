@@ -10,12 +10,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <exception>
+#include <future>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,6 +33,117 @@ constexpr std::int64_t kNanosecondsPerSecond = 1'000'000'000;
 struct FileMetadata {
         std::uint64_t file_size{};
         std::int64_t modified_time_ns{};
+};
+
+class MemoryLimitExceeded : public std::runtime_error {
+      public:
+        MemoryLimitExceeded()
+            : std::runtime_error("memory limit exceeded during index build") {}
+};
+
+class BuildMemoryBudget {
+      public:
+        /** @brief Creates a classified logical-memory budget. */
+        explicit BuildMemoryBudget(std::uint64_t limit_bytes)
+            : limit_bytes_(limit_bytes) {}
+
+        /**
+         * @brief Replaces one reservation while preserving the total limit.
+         * @param current_bytes Bytes currently charged by the caller.
+         * @param requested_bytes Replacement charge requested by the caller.
+         * @throws MemoryLimitExceeded If the replacement exceeds the limit.
+         */
+        void resize(std::uint64_t current_bytes,
+                    std::uint64_t requested_bytes) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (current_bytes > used_bytes_) {
+                        throw std::logic_error(
+                                "memory budget accounting underflow");
+                }
+                const auto other_bytes = used_bytes_ - current_bytes;
+                if (requested_bytes > limit_bytes_ - other_bytes) {
+                        throw MemoryLimitExceeded();
+                }
+                used_bytes_ = other_bytes + requested_bytes;
+                peak_bytes_ = std::max(peak_bytes_, used_bytes_);
+        }
+
+        /** @brief Releases a previously accepted reservation without throwing.
+         */
+        void release(std::uint64_t bytes) noexcept {
+                std::lock_guard<std::mutex> lock(mutex_);
+                used_bytes_ -= std::min(bytes, used_bytes_);
+        }
+
+        /** @brief Returns the greatest accepted concurrent reservation. */
+        [[nodiscard]] std::uint64_t peak_bytes() const noexcept {
+                std::lock_guard<std::mutex> lock(mutex_);
+                return peak_bytes_;
+        }
+
+      private:
+        std::uint64_t limit_bytes_{};
+        mutable std::mutex mutex_;
+        std::uint64_t used_bytes_{};
+        std::uint64_t peak_bytes_{};
+};
+
+class MemoryReservation {
+      public:
+        MemoryReservation() = default;
+
+        /** @brief Binds an initially empty charge to a shared budget. */
+        explicit MemoryReservation(BuildMemoryBudget &budget) noexcept
+            : budget_(&budget) {}
+
+        MemoryReservation(const MemoryReservation &) = delete;
+        MemoryReservation &operator=(const MemoryReservation &) = delete;
+
+        /** @brief Transfers ownership of an accepted memory charge. */
+        MemoryReservation(MemoryReservation &&other) noexcept
+            : budget_(std::exchange(other.budget_, nullptr)),
+              bytes_(std::exchange(other.bytes_, 0)) {}
+
+        /** @brief Releases the old charge and takes another reservation. */
+        MemoryReservation &operator=(MemoryReservation &&other) noexcept {
+                if (this != &other) {
+                        reset();
+                        budget_ = std::exchange(other.budget_, nullptr);
+                        bytes_ = std::exchange(other.bytes_, 0);
+                }
+                return *this;
+        }
+
+        /** @brief Releases the accepted charge. */
+        ~MemoryReservation() { reset(); }
+
+        /**
+         * @brief Replaces the caller's logical-memory charge.
+         * @param bytes New classified byte count.
+         * @throws MemoryLimitExceeded If the shared limit would be exceeded.
+         */
+        void resize(std::uint64_t bytes) {
+                if (budget_ != nullptr) {
+                        budget_->resize(bytes_, bytes);
+                }
+                bytes_ = bytes;
+        }
+
+        /** @brief Releases all charged bytes while retaining no binding. */
+        void reset() noexcept {
+                if (budget_ != nullptr) {
+                        budget_->release(bytes_);
+                }
+                budget_ = nullptr;
+                bytes_ = 0;
+        }
+
+        /** @brief Returns bytes currently charged by this reservation. */
+        [[nodiscard]] std::uint64_t bytes() const noexcept { return bytes_; }
+
+      private:
+        BuildMemoryBudget *budget_{};
+        std::uint64_t bytes_{};
 };
 
 /**
@@ -91,6 +206,14 @@ struct ParsedDocument {
         document::TextReadStats read_stats;
         std::vector<analysis::Token> tokens;
         std::uint64_t token_term_bytes{};
+        BuildMemoryStats memory_stats;
+        MemoryReservation memory_reservation;
+};
+
+struct ParseTaskResult {
+        std::optional<ParsedDocument> document;
+        std::string error;
+        BuildMemoryStats memory_stats;
 };
 
 using common::detail::checked_add;
@@ -225,24 +348,18 @@ class BuildWorkspace {
         std::uint64_t peak_bytes_{};
 };
 
-struct MergePipelineResult {
-        std::uint64_t memory_bytes{};
-        std::uint64_t pass_count{};
-};
-
 /**
  * @brief Merges and validates one ordered Segment group, then removes inputs.
  * @param output Unique intermediate or final candidate path.
  * @param sources Two or more Segments in global document order.
  * @param workspace Private workspace enforcing temporary storage limits.
- * @param memory_bytes Peak merge working-memory estimate updated in place.
  * @return Validated output Segment descriptor.
  * @throws std::runtime_error If capacity, merge, validation, or cleanup fails.
  */
 [[nodiscard]] storage::detail::SegmentSource
 merge_segment_group(const std::filesystem::path &output,
                     const std::vector<storage::detail::SegmentSource> &sources,
-                    BuildWorkspace &workspace, std::uint64_t &memory_bytes) {
+                    BuildWorkspace &workspace) {
         std::uint64_t input_bytes = 0;
         for (const auto &source : sources) {
                 input_bytes = checked_add(input_bytes, source.stats.file_size,
@@ -252,9 +369,8 @@ merge_segment_group(const std::filesystem::path &output,
                 checked_multiply(input_bytes, 2, "merge temporary reservation");
         workspace.require_additional(reserved_bytes);
 
-        const auto merged = storage::detail::merge_index_files(output, sources);
-        workspace.note_transient_peak(merged.peak_additional_disk_bytes);
-        memory_bytes = std::max(memory_bytes, merged.working_memory_bytes);
+        workspace.note_transient_peak(
+                storage::detail::merge_index_files(output, sources));
 
         const auto stats = storage::validate_index_file(output);
         workspace.add_file(stats.file_size);
@@ -270,14 +386,14 @@ merge_segment_group(const std::filesystem::path &output,
  * @param sources Initial Segments in document order; must contain at least two.
  * @param fan_in Maximum sources consumed by one merge.
  * @param workspace Private workspace owning every source and output.
- * @return Peak merge memory estimate and number of merge levels performed.
+ * @return Number of merge levels performed.
  * @throws std::runtime_error If any merge level cannot complete safely.
  */
-[[nodiscard]] MergePipelineResult
+[[nodiscard]] std::uint64_t
 merge_segment_levels(const std::filesystem::path &candidate,
                      std::vector<storage::detail::SegmentSource> sources,
                      std::size_t fan_in, BuildWorkspace &workspace) {
-        MergePipelineResult result;
+        std::uint64_t pass_count = 0;
 
         // Reduce oversized levels into ordered intermediate Segments.
         while (sources.size() > fan_in) {
@@ -301,22 +417,18 @@ merge_segment_levels(const std::filesystem::path &candidate,
                         }
                         const auto output =
                                 workspace.path() /
-                                ("merge-" + std::to_string(result.pass_count) +
-                                 "-" + std::to_string(group_number) + ".idx");
-                        next.push_back(merge_segment_group(
-                                output, group, workspace, result.memory_bytes));
+                                ("merge-" + std::to_string(pass_count) + "-" +
+                                 std::to_string(group_number) + ".idx");
+                        next.push_back(
+                                merge_segment_group(output, group, workspace));
                 }
                 sources = std::move(next);
-                result.pass_count =
-                        checked_add(result.pass_count, 1, "merge pass count");
+                pass_count = checked_add(pass_count, 1, "merge pass count");
         }
 
         // The remaining bounded group becomes the publishable candidate.
-        static_cast<void>(merge_segment_group(candidate, sources, workspace,
-                                              result.memory_bytes));
-        result.pass_count =
-                checked_add(result.pass_count, 1, "merge pass count");
-        return result;
+        static_cast<void>(merge_segment_group(candidate, sources, workspace));
+        return checked_add(pass_count, 1, "merge pass count");
 }
 
 /**
@@ -496,7 +608,8 @@ void finalize_memory_stats(const std::vector<std::filesystem::path> &scan_paths,
  * @param reader Configured reader used to stream validated UTF-8 chunks.
  * @param read_options Reader buffer configuration used for memory estimation.
  * @param tokenizer_options Rules and limits applied during tokenization.
- * @param memory Aggregate memory statistics updated during parsing.
+ * @param memory_budget Optional shared classified-memory budget.
+ * @param observed_memory Optional aggregate receiving transient parse peaks.
  * @return Metadata, read statistics, and the complete token sequence.
  * @throws std::runtime_error If metadata, reading, or UTF-8 validation fails.
  * @throws std::length_error If a token exceeds the configured limit.
@@ -507,12 +620,21 @@ parse_document(const std::filesystem::path &path,
                const document::TextReader &reader,
                const document::TextReadOptions &read_options,
                const analysis::TokenizerOptions &tokenizer_options,
-               BuildMemoryStats &memory) {
+               BuildMemoryBudget *memory_budget = nullptr,
+               BuildMemoryStats *observed_memory = nullptr) {
         ParsedDocument parsed;
+        if (memory_budget != nullptr) {
+                parsed.memory_reservation = MemoryReservation(*memory_budget);
+        }
 
-        memory.reader_peak_bytes =
-                std::max(memory.reader_peak_bytes,
+        parsed.memory_stats.reader_peak_bytes =
+                std::max(parsed.memory_stats.reader_peak_bytes,
                          estimated_reader_peak_bytes(read_options));
+        if (observed_memory != nullptr) {
+                observed_memory->reader_peak_bytes =
+                        std::max(observed_memory->reader_peak_bytes,
+                                 parsed.memory_stats.reader_peak_bytes);
+        }
 
         // Capture metadata before reading so a changed or invalid candidate is
         // rejected before any token work is retained.
@@ -521,9 +643,18 @@ parse_document(const std::filesystem::path &path,
         // Stream reader chunks through one tokenizer session so tokens may span
         // chunk boundaries while positions remain continuous.
         analysis::TokenizerSession tokenizer(tokenizer_options);
-        record_token_peak(parsed, tokenizer_options, memory);
+        record_token_peak(parsed, tokenizer_options, parsed.memory_stats);
+        if (observed_memory != nullptr) {
+                observed_memory->token_peak_bytes =
+                        std::max(observed_memory->token_peak_bytes,
+                                 parsed.memory_stats.token_peak_bytes);
+        }
+        parsed.memory_reservation.resize(checked_add(
+                parsed.memory_stats.reader_peak_bytes,
+                parsed.memory_stats.token_peak_bytes, "parsed document"));
         const analysis::TokenConsumer token_consumer =
-                [&parsed, &tokenizer_options, &memory](analysis::Token token) {
+                [&parsed, &tokenizer_options,
+                 observed_memory](analysis::Token token) {
                         parsed.tokens.push_back(std::move(token));
                         parsed.token_term_bytes = checked_add(
                                 parsed.token_term_bytes,
@@ -531,7 +662,17 @@ parse_document(const std::filesystem::path &path,
                                         parsed.tokens.back().term.capacity(),
                                         sizeof(char), "token term"),
                                 "token terms");
-                        record_token_peak(parsed, tokenizer_options, memory);
+                        record_token_peak(parsed, tokenizer_options,
+                                          parsed.memory_stats);
+                        if (observed_memory != nullptr) {
+                                observed_memory->token_peak_bytes = std::max(
+                                        observed_memory->token_peak_bytes,
+                                        parsed.memory_stats.token_peak_bytes);
+                        }
+                        parsed.memory_reservation.resize(checked_add(
+                                parsed.memory_stats.reader_peak_bytes,
+                                parsed.memory_stats.token_peak_bytes,
+                                "parsed document"));
                 };
         parsed.read_stats = reader.read(
                 path, [&tokenizer, &token_consumer](std::string_view chunk) {
@@ -591,6 +732,31 @@ void commit_document(const std::filesystem::path &path, ParsedDocument parsed,
 
 } // namespace
 
+PersistentBuildOptions persistent_build_options(ResourceProfile profile) {
+        PersistentBuildOptions options;
+        switch (profile) {
+        case ResourceProfile::minimal:
+                options.memory_budget_bytes = 128ULL * 1024ULL * 1024ULL;
+                options.segment_flush_threshold_bytes =
+                        32ULL * 1024ULL * 1024ULL;
+                options.worker_thread_count = 1;
+                options.merge_fan_in = 4;
+                options.in_memory_options.store_positions = false;
+                break;
+        case ResourceProfile::balanced:
+                break;
+        case ResourceProfile::performance:
+                options.memory_budget_bytes = 1024ULL * 1024ULL * 1024ULL;
+                options.segment_flush_threshold_bytes =
+                        512ULL * 1024ULL * 1024ULL;
+                options.worker_thread_count = std::max<std::size_t>(
+                        1, std::thread::hardware_concurrency());
+                options.merge_fan_in = 32;
+                break;
+        }
+        return options;
+}
+
 InMemoryIndexBuilder::InMemoryIndexBuilder(InMemoryBuildOptions options)
     : options_(std::move(options)) {
         static_cast<void>(document::TextReader(options_.read_options));
@@ -600,6 +766,7 @@ InMemoryIndexBuilder::InMemoryIndexBuilder(InMemoryBuildOptions options)
 InMemoryBuildResult
 InMemoryIndexBuilder::build(const std::filesystem::path &source) const {
         InMemoryBuildResult result;
+        result.index = InMemoryIndex(options_.store_positions);
 
         // Discover and sort candidates first so successful document IDs remain
         // deterministic for a stable source tree.
@@ -616,8 +783,8 @@ InMemoryIndexBuilder::build(const std::filesystem::path &source) const {
                 try {
                         parsed.emplace(parse_document(
                                 path, reader, options_.read_options,
-                                options_.tokenizer_options,
-                                result.stats.memory));
+                                options_.tokenizer_options, nullptr,
+                                &result.stats.memory));
                 } catch (const std::length_error &error) {
                         result.document_errors.push_back(
                                 BuildError{path, error.what()});
@@ -652,6 +819,13 @@ IndexBuilder::IndexBuilder(PersistentBuildOptions options)
                 throw std::invalid_argument(
                         "merge fan-in must be at least two");
         }
+        if (options_.memory_budget_bytes == 0) {
+                throw std::invalid_argument("memory budget must be positive");
+        }
+        if (options_.worker_thread_count == 0) {
+                throw std::invalid_argument(
+                        "worker thread count must be positive");
+        }
         static_cast<void>(InMemoryIndexBuilder(options_.in_memory_options));
 }
 
@@ -670,14 +844,39 @@ IndexBuilder::build(const std::filesystem::path &source,
         std::filesystem::create_directories(index_directory);
         BuildWorkspace workspace(index_directory,
                                  options_.temporary_space_budget_bytes);
+        BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
+        MemoryReservation metadata_memory(memory_budget);
+        MemoryReservation active_batch_memory(memory_budget);
         PersistentBuildResult result;
         result.stats.scanned_files = scan_result.files.size();
         result.scan_errors = std::move(scan_result.errors);
+        result.worker_thread_count = options_.worker_thread_count;
+        result.positions_enabled = options_.in_memory_options.store_positions;
 
         document::DocumentStore batch_documents;
-        InMemoryIndex batch_index;
+        InMemoryIndex batch_index(options_.in_memory_options.store_positions);
         std::vector<storage::detail::SegmentSource> segments;
         std::uint64_t peak_batch_document_bytes = 0;
+        const auto effective_flush_threshold = std::min(
+                options_.segment_flush_threshold_bytes,
+                std::max<std::uint64_t>(1, options_.memory_budget_bytes / 2));
+
+        /** Refreshes retained scanner, diagnostic, and Segment metadata. */
+        const auto refresh_metadata_memory = [&]() {
+                auto bytes = estimated_path_list_bytes(scan_result.files);
+                bytes = checked_add(
+                        bytes, estimated_scan_error_bytes(result.scan_errors),
+                        "metadata memory");
+                bytes = checked_add(
+                        bytes,
+                        estimated_build_error_bytes(result.document_errors),
+                        "metadata memory");
+                bytes = checked_add(bytes,
+                                    estimated_segment_source_bytes(segments),
+                                    "metadata memory");
+                metadata_memory.resize(bytes);
+        };
+        refresh_metadata_memory();
 
         /** Flushes one complete document batch into the private workspace. */
         const auto flush_batch = [&]() {
@@ -693,61 +892,158 @@ IndexBuilder::build(const std::filesystem::path &source,
                 workspace.add_file(stats.file_size);
                 segments.push_back(storage::detail::SegmentSource{path, stats});
                 batch_documents = {};
-                batch_index = {};
+                batch_index = InMemoryIndex(
+                        options_.in_memory_options.store_positions);
+                active_batch_memory.resize(0);
+                refresh_metadata_memory();
         };
 
-        // Parse each file transactionally and flush only at document borders.
-        const document::TextReader reader(
-                options_.in_memory_options.read_options);
-        for (const auto &path : scan_result.files) {
-                std::optional<ParsedDocument> parsed;
+        // Parse bounded waves concurrently, then commit in scanner order.
+        for (std::size_t begin = 0; begin < scan_result.files.size();) {
+                const auto count = std::min(options_.worker_thread_count,
+                                            scan_result.files.size() - begin);
+                std::vector<std::future<ParseTaskResult>> futures;
+                futures.reserve(count);
                 try {
-                        parsed.emplace(parse_document(
-                                path, reader,
-                                options_.in_memory_options.read_options,
-                                options_.in_memory_options.tokenizer_options,
-                                result.stats.memory));
-                } catch (const std::length_error &error) {
-                        result.document_errors.push_back(
-                                BuildError{path, error.what()});
-                        result.stats.failed_files = checked_add(
-                                result.stats.failed_files, 1, "failed_files");
-                        continue;
-                } catch (const std::runtime_error &error) {
-                        result.document_errors.push_back(
-                                BuildError{path, error.what()});
-                        result.stats.failed_files = checked_add(
-                                result.stats.failed_files, 1, "failed_files");
-                        continue;
+                        for (std::size_t offset = 0; offset < count; ++offset) {
+                                const auto path =
+                                        scan_result.files[begin + offset];
+                                futures.push_back(std::async(
+                                        std::launch::async,
+                                        [this, path, &memory_budget]() {
+                                                BuildMemoryStats observed;
+                                                const document::TextReader reader(
+                                                        options_.in_memory_options
+                                                                .read_options);
+                                                try {
+                                                        auto document = parse_document(
+                                                                path, reader,
+                                                                options_.in_memory_options
+                                                                        .read_options,
+                                                                options_.in_memory_options
+                                                                        .tokenizer_options,
+                                                                &memory_budget,
+                                                                &observed);
+                                                        return ParseTaskResult{
+                                                                std::move(
+                                                                        document),
+                                                                {},
+                                                                observed};
+                                                } catch (
+                                                        const MemoryLimitExceeded
+                                                                &) {
+                                                        throw;
+                                                } catch (const std::length_error
+                                                                 &error) {
+                                                        return ParseTaskResult{
+                                                                std::nullopt,
+                                                                error.what(),
+                                                                observed};
+                                                } catch (
+                                                        const std::runtime_error
+                                                                &error) {
+                                                        return ParseTaskResult{
+                                                                std::nullopt,
+                                                                error.what(),
+                                                                observed};
+                                                }
+                                        }));
+                        }
+                } catch (const std::system_error &error) {
+                        throw std::runtime_error(
+                                "failed to start index worker: " +
+                                std::string(error.what()));
                 }
 
-                const auto relative = path.lexically_relative(canonical_source);
-                if (relative.empty() || relative.is_absolute()) {
-                        throw std::runtime_error("indexed document is outside "
-                                                 "the source root: " +
-                                                 path.string());
+                std::vector<ParseTaskResult> outcomes(count);
+                std::exception_ptr fatal_error;
+                for (std::size_t offset = 0; offset < count; ++offset) {
+                        const auto &path = scan_result.files[begin + offset];
+                        try {
+                                outcomes[offset] = futures[offset].get();
+                        } catch (const MemoryLimitExceeded &) {
+                                fatal_error = std::current_exception();
+                                continue;
+                        }
+                        result.stats.memory.reader_peak_bytes = std::max(
+                                result.stats.memory.reader_peak_bytes,
+                                outcomes[offset]
+                                        .memory_stats.reader_peak_bytes);
+                        result.stats.memory.token_peak_bytes = std::max(
+                                result.stats.memory.token_peak_bytes,
+                                outcomes[offset].memory_stats.token_peak_bytes);
+                        if (!outcomes[offset].error.empty()) {
+                                result.document_errors.push_back(BuildError{
+                                        path, outcomes[offset].error});
+                                result.stats.failed_files =
+                                        checked_add(result.stats.failed_files,
+                                                    1, "failed_files");
+                                refresh_metadata_memory();
+                        }
                 }
-                commit_document(relative, std::move(*parsed), batch_documents,
-                                batch_index, result.stats);
-                const auto document_bytes =
-                        batch_documents.estimated_memory_bytes();
-                peak_batch_document_bytes =
-                        std::max(peak_batch_document_bytes, document_bytes);
-                const auto index_memory = batch_index.estimated_memory_usage();
-                result.stats.memory.dictionary_bytes =
-                        std::max(result.stats.memory.dictionary_bytes,
-                                 index_memory.dictionary_bytes);
-                result.stats.memory.posting_bytes =
-                        std::max(result.stats.memory.posting_bytes,
-                                 index_memory.posting_bytes);
-                auto retained = checked_add(document_bytes,
-                                            index_memory.dictionary_bytes,
-                                            "active Segment memory");
-                retained = checked_add(retained, index_memory.posting_bytes,
-                                       "active Segment memory");
-                if (retained >= options_.segment_flush_threshold_bytes) {
-                        flush_batch();
+                if (fatal_error != nullptr) {
+                        std::rethrow_exception(fatal_error);
                 }
+
+                for (std::size_t offset = 0; offset < count; ++offset) {
+                        auto &parsed = outcomes[offset].document;
+                        if (!parsed.has_value()) {
+                                continue;
+                        }
+                        auto &document = *parsed;
+
+                        MemoryReservation commit_headroom(memory_budget);
+                        try {
+                                commit_headroom.resize(
+                                        document.memory_reservation.bytes());
+                        } catch (const MemoryLimitExceeded &) {
+                                if (batch_documents.size() == 0) {
+                                        throw;
+                                }
+                                flush_batch();
+                                commit_headroom.resize(
+                                        document.memory_reservation.bytes());
+                        }
+
+                        const auto &path = scan_result.files[begin + offset];
+                        const auto relative =
+                                path.lexically_relative(canonical_source);
+                        if (relative.empty() || relative.is_absolute()) {
+                                throw std::runtime_error("indexed document is "
+                                                         "outside the source "
+                                                         "root: " +
+                                                         path.string());
+                        }
+                        commit_document(relative, std::move(document),
+                                        batch_documents, batch_index,
+                                        result.stats);
+                        parsed.reset();
+
+                        const auto document_bytes =
+                                batch_documents.estimated_memory_bytes();
+                        peak_batch_document_bytes = std::max(
+                                peak_batch_document_bytes, document_bytes);
+                        const auto index_memory =
+                                batch_index.estimated_memory_usage();
+                        result.stats.memory.dictionary_bytes =
+                                std::max(result.stats.memory.dictionary_bytes,
+                                         index_memory.dictionary_bytes);
+                        result.stats.memory.posting_bytes =
+                                std::max(result.stats.memory.posting_bytes,
+                                         index_memory.posting_bytes);
+                        auto retained = checked_add(
+                                document_bytes, index_memory.dictionary_bytes,
+                                "active Segment memory");
+                        retained = checked_add(retained,
+                                               index_memory.posting_bytes,
+                                               "active Segment memory");
+                        active_batch_memory.resize(retained);
+                        commit_headroom.reset();
+                        if (retained >= effective_flush_threshold) {
+                                flush_batch();
+                        }
+                }
+                begin += count;
         }
         flush_batch();
         result.temporary_segment_count = segments.size();
@@ -759,7 +1055,9 @@ IndexBuilder::build(const std::filesystem::path &source,
         std::uint64_t merge_memory = 0;
         if (segments.empty()) {
                 const auto stats = storage::detail::write_index_file_bounded(
-                        candidate, document::DocumentStore{}, InMemoryIndex{},
+                        candidate, document::DocumentStore{},
+                        InMemoryIndex(
+                                options_.in_memory_options.store_positions),
                         workspace.remaining_bytes());
                 workspace.add_file(stats.file_size);
                 static_cast<void>(storage::validate_index_file(candidate));
@@ -767,13 +1065,16 @@ IndexBuilder::build(const std::filesystem::path &source,
                 std::filesystem::rename(segments.front().path, candidate);
                 static_cast<void>(storage::validate_index_file(candidate));
         } else {
-                const auto merged =
+                MemoryReservation merge_reservation(memory_budget);
+                merge_memory = storage::detail::estimate_segment_merge_memory(
+                        std::min(segments.size(), options_.merge_fan_in));
+                merge_reservation.resize(merge_memory);
+                result.merge_pass_count =
                         merge_segment_levels(candidate, std::move(segments),
                                              options_.merge_fan_in, workspace);
-                merge_memory = merged.memory_bytes;
-                result.merge_pass_count = merged.pass_count;
         }
         result.temporary_peak_bytes = workspace.peak_bytes();
+        result.memory_peak_bytes = memory_budget.peak_bytes();
 
         auto metadata = estimated_path_list_bytes(scan_result.files);
         metadata = checked_add(metadata,

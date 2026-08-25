@@ -15,12 +15,12 @@ using Position = std::uint32_t;
 
 struct Posting {
         document::DocumentId document_id{};
+        std::uint32_t frequency{};
         std::vector<Position> positions;
 
         /**
          * @brief Reports how often the term occurs in this document.
-         * @return The number of recorded positions.
-         * @throws std::overflow_error If the count exceeds std::uint32_t.
+         * @return Stored nonzero frequency, independent of optional positions.
          */
         [[nodiscard]] std::uint32_t term_frequency() const;
 };
@@ -34,7 +34,11 @@ struct InMemoryIndexMemoryUsage {
 
 class InMemoryIndex {
       public:
-        InMemoryIndex() = default;
+        /**
+         * @brief Creates an index that optionally retains token positions.
+         * @param store_positions Whether occurrences keep positional data.
+         */
+        explicit InMemoryIndex(bool store_positions = true) noexcept;
 
         InMemoryIndex(const InMemoryIndex &) = delete;
         InMemoryIndex &operator=(const InMemoryIndex &) = delete;
@@ -46,8 +50,8 @@ class InMemoryIndex {
          * @param term Nonempty normalized term to index.
          * @param document_id Document containing the occurrence; IDs for one
          * term must be nondecreasing.
-         * @param position Position within the document; positions for one
-         * posting must be strictly increasing.
+         * @param position Position within the document; retained positions for
+         * one posting must be strictly increasing.
          * @throws std::invalid_argument If the term is empty or ordering is
          * invalid.
          * @throws std::overflow_error If term frequency or the retained-memory
@@ -56,6 +60,22 @@ class InMemoryIndex {
         void add_occurrence(std::string_view term,
                             document::DocumentId document_id,
                             Position position);
+
+        /**
+         * @brief Adds one complete ordered posting while loading an index.
+         * @param term Nonempty normalized term to index.
+         * @param document_id Document containing the term.
+         * @param frequency Nonzero occurrence count retained for ranking.
+         * @param positions Strictly increasing positions when enabled, or an
+         * empty vector when disabled.
+         * @throws std::invalid_argument If frequency, positions, or ordering
+         * violate index invariants.
+         * @throws std::overflow_error If retained-memory accounting overflows.
+         */
+        void add_posting(std::string_view term,
+                         document::DocumentId document_id,
+                         std::uint32_t frequency,
+                         std::vector<Position> positions);
 
         /**
          * @brief Finds the posting list for an exact normalized term.
@@ -81,9 +101,30 @@ class InMemoryIndex {
          */
         [[nodiscard]] InMemoryIndexMemoryUsage estimated_memory_usage() const;
 
+        /** @brief Returns whether this index retains token positions. */
+        [[nodiscard]] bool stores_positions() const noexcept;
+
       private:
+        /**
+         * @brief Returns the posting list for a term, creating it if needed.
+         * @param term Nonempty normalized dictionary key.
+         * @return Mutable posting list owned by this index.
+         * @throws std::invalid_argument If the term is empty.
+         * @throws std::overflow_error If memory accounting overflows.
+         */
+        PostingList &postings_for(std::string_view term);
+
+        /**
+         * @brief Appends a posting and updates retained-memory accounting.
+         * @param postings Ordered list that receives the posting.
+         * @param posting Complete posting transferred into the list.
+         * @throws std::overflow_error If memory accounting overflows.
+         */
+        void append_posting(PostingList &postings, Posting posting);
+
         std::unordered_map<std::string, PostingList> dictionary_;
         InMemoryIndexMemoryUsage memory_usage_;
+        bool store_positions_{true};
 };
 
 } // namespace snowseek::index

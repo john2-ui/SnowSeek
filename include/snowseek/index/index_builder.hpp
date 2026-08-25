@@ -20,11 +20,21 @@ inline constexpr std::uint64_t kDefaultSegmentFlushThresholdBytes =
 inline constexpr std::uint64_t kDefaultTemporarySpaceBudgetBytes =
         std::numeric_limits<std::uint64_t>::max();
 inline constexpr std::size_t kDefaultMergeFanIn = 16;
+inline constexpr std::uint64_t kDefaultMemoryBudgetBytes =
+        256ULL * 1024ULL * 1024ULL;
+inline constexpr std::size_t kDefaultWorkerThreadCount = 2;
+
+enum class ResourceProfile {
+        minimal,
+        balanced,
+        performance,
+};
 
 struct InMemoryBuildOptions {
         filesystem::ScanOptions scan_options;
         document::TextReadOptions read_options;
         analysis::TokenizerOptions tokenizer_options;
+        bool store_positions{true};
 };
 
 struct BuildError {
@@ -71,7 +81,7 @@ class InMemoryIndexBuilder {
         explicit InMemoryIndexBuilder(InMemoryBuildOptions options = {});
 
         /**
-         * @brief Builds a document table and positional inverted index from a
+         * @brief Builds a document table and optional positional index from a
          * source tree.
          * @param source Root directory scanned for candidate documents.
          * @return The successfully indexed documents, postings, diagnostics,
@@ -95,6 +105,9 @@ struct PersistentBuildResult {
         std::uint64_t temporary_segment_count{};
         std::uint64_t temporary_peak_bytes{};
         std::uint64_t merge_pass_count{};
+        std::uint64_t memory_peak_bytes{};
+        std::size_t worker_thread_count{};
+        bool positions_enabled{true};
 };
 
 struct PersistentBuildOptions {
@@ -104,7 +117,17 @@ struct PersistentBuildOptions {
         std::uint64_t temporary_space_budget_bytes{
                 kDefaultTemporarySpaceBudgetBytes};
         std::size_t merge_fan_in{kDefaultMergeFanIn};
+        std::uint64_t memory_budget_bytes{kDefaultMemoryBudgetBytes};
+        std::size_t worker_thread_count{kDefaultWorkerThreadCount};
 };
+
+/**
+ * @brief Returns the fixed build settings for one resource profile.
+ * @param profile Minimal, Balanced, or Performance resource policy.
+ * @return Complete persistent build options for the selected profile.
+ */
+[[nodiscard]] PersistentBuildOptions
+persistent_build_options(ResourceProfile profile);
 
 class IndexBuilder {
       public:
@@ -112,9 +135,9 @@ class IndexBuilder {
          * @brief Creates a persistent builder with positive resource limits.
          * @param options Scanner, reader, tokenizer, and Segment batching
          * configuration.
-         * @throws std::invalid_argument If the flush threshold or temporary
-         * budget is zero, fan-in is below two, or nested reader or tokenizer
-         * configuration is invalid.
+         * @throws std::invalid_argument If a memory, temporary-space, flush, or
+         * worker limit is zero, fan-in is below two, or nested configuration
+         * is invalid.
          */
         explicit IndexBuilder(PersistentBuildOptions options = {});
 

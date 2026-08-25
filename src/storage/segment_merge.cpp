@@ -127,7 +127,8 @@ class TermCursor {
               term_bytes_(open_input(source.path)),
               postings_(open_input(source.path)),
               positions_(open_input(source.path)),
-              document_base_(document_base) {
+              document_base_(document_base),
+              has_positions_((header_.feature_flags & kFeaturePositions) != 0) {
                 seek_to(term_records_, header_.sections[2].offset);
                 term_count_ = read_u64_le(term_records_);
                 if (term_count_ != source.stats.term_count) {
@@ -199,22 +200,31 @@ class TermCursor {
                                         "global document id");
                         write_u32_le(postings_output, global_document);
                         write_u32_le(postings_output, frequency);
-                        write_u64_le(postings_output, output_position_offset);
+                        write_u64_le(postings_output,
+                                     has_positions_ ? output_position_offset
+                                                    : 0);
 
-                        seek_to(positions_,
-                                checked_add(header_.sections[4].offset,
-                                            position_offset,
-                                            "position offset"));
-                        for (std::uint32_t position_index = 0;
-                             position_index < frequency; ++position_index) {
-                                write_u32_le(positions_output,
-                                             read_u32_le(positions_));
+                        if (has_positions_) {
+                                seek_to(positions_,
+                                        checked_add(header_.sections[4].offset,
+                                                    position_offset,
+                                                    "position offset"));
+                                for (std::uint32_t position_index = 0;
+                                     position_index < frequency;
+                                     ++position_index) {
+                                        write_u32_le(positions_output,
+                                                     read_u32_le(positions_));
+                                }
+                                output_position_offset = checked_add(
+                                        output_position_offset,
+                                        checked_multiply(
+                                                frequency, 4,
+                                                "position byte length"),
+                                        "position offset");
+                        } else if (position_offset != 0) {
+                                throw std::runtime_error("positionless Segment "
+                                                         "has nonzero offset");
                         }
-                        output_position_offset = checked_add(
-                                output_position_offset,
-                                checked_multiply(frequency, 4,
-                                                 "position byte length"),
-                                "position offset");
                 }
         }
 
@@ -230,6 +240,7 @@ class TermCursor {
         bool valid_{};
         TermRecord record_;
         std::string term_;
+        bool has_positions_{};
 };
 
 /**
@@ -417,12 +428,30 @@ copy_spool(const std::filesystem::path &path, std::ostream &output,
 
 } // namespace
 
-SegmentMergeResult
-merge_index_files(const std::filesystem::path &output,
-                  const std::vector<SegmentSource> &sources) {
+std::uint64_t estimate_segment_merge_memory(std::size_t source_count) {
+        const auto source_bytes =
+                checked_multiply(source_count,
+                                 sizeof(SegmentSource) + sizeof(TermCursor) +
+                                         2 * sizeof(std::size_t),
+                                 "merge cursor memory");
+        return checked_add(source_bytes, kCopyBufferSize + kIndexHeaderSize,
+                           "merge working memory");
+}
+
+std::uint64_t merge_index_files(const std::filesystem::path &output,
+                                const std::vector<SegmentSource> &sources) {
         if (sources.empty()) {
                 throw std::invalid_argument(
                         "merge requires at least one temporary Segment");
+        }
+
+        const auto first_header = read_segment_header(sources.front().path);
+        for (const auto &source : sources) {
+                if (read_segment_header(source.path).feature_flags !=
+                    first_header.feature_flags) {
+                        throw std::runtime_error("cannot merge Segments with "
+                                                 "different features");
+                }
         }
 
         const auto parent = output.parent_path();
@@ -509,6 +538,7 @@ merge_index_files(const std::filesystem::path &output,
         std::array<char, kIndexHeaderSize> empty_header{};
         candidate.write(empty_header.data(), empty_header.size());
         IndexHeader header;
+        header.feature_flags = first_header.feature_flags;
         std::uint64_t file_offset = kIndexHeaderSize;
         std::uint64_t spool_bytes = 0;
         std::array<char, kCopyBufferSize> copy_buffer{};
@@ -556,15 +586,7 @@ merge_index_files(const std::filesystem::path &output,
                 }
         }
 
-        const auto source_bytes =
-                checked_multiply(sources.size(),
-                                 sizeof(SegmentSource) + sizeof(TermCursor) +
-                                         2 * sizeof(std::size_t),
-                                 "merge cursor memory");
-        return SegmentMergeResult{
-                checked_add(source_bytes, kCopyBufferSize + kIndexHeaderSize,
-                            "merge working memory"),
-                peak_additional_disk_bytes};
+        return peak_additional_disk_bytes;
 }
 
 } // namespace snowseek::storage::detail

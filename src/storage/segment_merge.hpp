@@ -2,6 +2,7 @@
 
 #include "snowseek/storage/index_file.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <vector>
@@ -13,20 +14,24 @@ struct SegmentSource {
         IndexFileStats stats;
 };
 
-struct SegmentMergeResult {
-        std::uint64_t working_memory_bytes{};
-        std::uint64_t peak_additional_disk_bytes{};
-};
+/**
+ * @brief Estimates bounded cursor and copy-buffer memory for one merge group.
+ * @param source_count Number of input Segments opened by the group.
+ * @return Classified merge working-memory bytes.
+ * @throws std::overflow_error If the estimate exceeds std::uint64_t.
+ */
+[[nodiscard]] std::uint64_t
+estimate_segment_merge_memory(std::size_t source_count);
 
 /**
  * @brief Merges ordered temporary v1 Segments into one byte-compatible file.
  * @param output Candidate output path whose parent is used for spool files.
  * @param sources Nonempty Segments in global document order.
- * @return Estimated working memory and actual peak spool-plus-output bytes.
+ * @return Actual peak spool-plus-output bytes retained during the merge.
  * @throws std::runtime_error If an input is malformed, a v1 limit is exceeded,
  * or temporary/output I/O fails.
  */
-[[nodiscard]] SegmentMergeResult
+[[nodiscard]] std::uint64_t
 merge_index_files(const std::filesystem::path &output,
                   const std::vector<SegmentSource> &sources);
 

@@ -58,3 +58,13 @@ M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算�
 源语料和已发布索引，也不等同于文件系统块配额或并发空间预留。内存容量估算同样不
 包含 allocator、运行库和内核页，也不是 RSS 硬限制；Linux 基准继续使用
 `getrusage(RUSAGE_SELF)` 独立校准。
+
+构建默认使用 Balanced 资源档位，以最多两个 `std::async` 任务并行解析固定波次，
+整波完成后仍按扫描顺序提交，因此 DocumentId 和最终字节不受调度顺序影响。逻辑
+内存账本通过 RAII reservation 同时约束扫描元数据、活动批次、并发文档及归并缓冲；
+超限属于致命构建错误，不作为普通坏文件跳过。该限制不统计 allocator、线程栈和
+writer 序列化缓冲，独立的 `memory_peak_bytes` 用于验证成功构建未突破分类预算。
+
+Minimal 档位关闭 Position：Posting 仍保存词频，v1 feature flag 清零、Positions 区
+为空且 offset 为零。加载、验证和归并均保留该能力位；词项、布尔和 BM25 查询继续
+工作，短语查询因缺少位置数据而明确拒绝。

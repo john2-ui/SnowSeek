@@ -141,4 +141,7 @@ of `0xFFFFFFFF`, and a final XOR of `0xFFFFFFFF`. The check value for ASCII
 A v1 reader accepts only format version 1 and known feature bits. It must not
 guess how to read a newer version. Logical records use fixed-width identifiers,
 explicit byte order, and no host padding so a Segment produced on x86_64 Linux
-can be consumed on AArch64 Linux.
+can be consumed on AArch64 Linux. Readers retain term frequency when the
+Positions feature is absent; term, Boolean, filtering, and BM25 operations stay
+available, while exact phrase evaluation must report that positions are not
+present rather than silently degrading to conjunction.

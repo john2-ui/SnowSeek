@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 project(SnowSeek VERSION 0.1.0 LANGUAGES CXX)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(SNOWSEEK_BUILD_TESTS "Build SnowSeek tests" ON)
@@ -34,6 +36,7 @@ add_library(snowseek_core
     src/storage/index_validation.cpp
 )
 add_library(SnowSeek::core ALIAS snowseek_core)
+target_link_libraries(snowseek_core PUBLIC Threads::Threads)
 
 target_compile_features(snowseek_core PUBLIC cxx_std_20)
 target_include_directories(snowseek_core

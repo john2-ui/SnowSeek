@@ -17,7 +17,8 @@ snowseek::index::PostingList make_postings(
         snowseek::index::PostingList postings;
         postings.reserve(document_ids.size());
         for (const auto document_id : document_ids) {
-                postings.push_back(snowseek::index::Posting{document_id, {0}});
+                postings.push_back(
+                        snowseek::index::Posting{document_id, 1, {0}});
         }
         return postings;
 }

@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -29,6 +30,7 @@ enum class QueryOutputFormat {
 struct IndexCommandOptions {
         std::filesystem::path index_directory;
         index::PersistentBuildOptions build;
+        index::ResourceProfile profile{index::ResourceProfile::balanced};
 };
 
 struct QueryCommandOptions {
@@ -46,6 +48,12 @@ void print_help() {
         std::cout << "\nIndex options:\n"
                   << "  --temporary-space-limit <size>  Limit private build "
                      "bytes\n"
+                  << "  --memory-limit <size>           Limit classified build "
+                     "memory\n"
+                  << "  --threads <N>                  Parse at most N files "
+                     "concurrently\n"
+                  << "  --profile <name>               minimal, balanced, or "
+                     "performance\n"
                   << "  --merge-fan-in <N>              Merge at most N "
                      "Segments (min 2)\n"
                   << "  Sizes accept B, KiB, MiB, GiB, or TiB suffixes\n"
@@ -58,23 +66,26 @@ void print_help() {
 }
 
 /**
- * @brief Parses a positive temporary-space size with optional IEC suffix.
+ * @brief Parses a positive resource size with an optional IEC suffix.
  * @param text Decimal integer followed by B, KiB, MiB, GiB, TiB, or nothing.
+ * @param option_name CLI option named in diagnostics.
  * @return Size converted to bytes.
  * @throws std::invalid_argument If the number or suffix is malformed or zero.
  * @throws std::overflow_error If conversion exceeds std::uint64_t.
  */
-[[nodiscard]] std::uint64_t parse_byte_size(std::string_view text) {
+[[nodiscard]] std::uint64_t
+parse_byte_size(std::string_view text,
+                std::string_view option_name = "--temporary-space-limit") {
         std::uint64_t value = 0;
         const auto result =
                 std::from_chars(text.data(), text.data() + text.size(), value);
         if (result.ec == std::errc::result_out_of_range) {
-                throw std::overflow_error(
-                        "--temporary-space-limit exceeds uint64_t");
+                throw std::overflow_error(std::string(option_name) +
+                                          " exceeds uint64_t");
         }
         if (result.ec != std::errc{} || value == 0) {
-                throw std::invalid_argument(
-                        "--temporary-space-limit requires a positive size");
+                throw std::invalid_argument(std::string(option_name) +
+                                            " requires a positive size");
         }
 
         const auto suffix =
@@ -91,12 +102,12 @@ void print_help() {
         } else if (suffix == "TiB") {
                 multiplier = 1ULL << 40U;
         } else {
-                throw std::invalid_argument(
-                        "--temporary-space-limit has an invalid IEC suffix");
+                throw std::invalid_argument(std::string(option_name) +
+                                            " has an invalid IEC suffix");
         }
         if (value > std::numeric_limits<std::uint64_t>::max() / multiplier) {
-                throw std::overflow_error(
-                        "--temporary-space-limit exceeds uint64_t");
+                throw std::overflow_error(std::string(option_name) +
+                                          " exceeds uint64_t");
         }
         return value * multiplier;
 }
@@ -120,6 +131,59 @@ void print_help() {
 }
 
 /**
+ * @brief Parses a positive worker count without trailing bytes.
+ * @param text Decimal integer supplied by the CLI.
+ * @return Positive count representable by std::size_t.
+ * @throws std::invalid_argument If the value is malformed or zero.
+ */
+[[nodiscard]] std::size_t parse_worker_threads(std::string_view text) {
+        std::size_t value = 0;
+        const auto result =
+                std::from_chars(text.data(), text.data() + text.size(), value);
+        if (text.empty() || result.ec != std::errc{} ||
+            result.ptr != text.data() + text.size() || value == 0) {
+                throw std::invalid_argument(
+                        "--threads requires a positive integer");
+        }
+        return value;
+}
+
+/**
+ * @brief Parses an exact lowercase resource-profile name.
+ * @param text User-provided profile token.
+ * @return Corresponding resource profile.
+ * @throws std::invalid_argument If the name is unsupported.
+ */
+[[nodiscard]] index::ResourceProfile
+parse_resource_profile(std::string_view text) {
+        if (text == "minimal") {
+                return index::ResourceProfile::minimal;
+        }
+        if (text == "balanced") {
+                return index::ResourceProfile::balanced;
+        }
+        if (text == "performance") {
+                return index::ResourceProfile::performance;
+        }
+        throw std::invalid_argument(
+                "--profile requires minimal, balanced, or performance");
+}
+
+/** @brief Returns the stable CLI spelling of a resource profile. */
+[[nodiscard]] std::string_view
+resource_profile_name(index::ResourceProfile profile) noexcept {
+        switch (profile) {
+        case index::ResourceProfile::minimal:
+                return "minimal";
+        case index::ResourceProfile::balanced:
+                return "balanced";
+        case index::ResourceProfile::performance:
+                return "performance";
+        }
+        return "balanced";
+}
+
+/**
  * @brief Parses persistent index destination and resource options.
  * @param argc Full process argument count.
  * @param argv Writable process argument vector.
@@ -129,8 +193,11 @@ void print_help() {
 [[nodiscard]] IndexCommandOptions parse_index_options(int argc, char *argv[]) {
         IndexCommandOptions options;
         bool has_index = false;
-        bool has_temporary_limit = false;
-        bool has_merge_fan_in = false;
+        bool has_profile = false;
+        std::optional<std::uint64_t> temporary_limit;
+        std::optional<std::size_t> merge_fan_in;
+        std::optional<std::uint64_t> memory_limit;
+        std::optional<std::size_t> worker_threads;
         for (int argument = 3; argument < argc; ++argument) {
                 const std::string_view option(argv[argument]);
                 if (argument + 1 >= argc) {
@@ -141,17 +208,27 @@ void print_help() {
                         options.index_directory = argv[++argument];
                         has_index = true;
                 } else if (option == "--temporary-space-limit" &&
-                           !has_temporary_limit) {
-                        options.build.temporary_space_budget_bytes =
-                                parse_byte_size(argv[++argument]);
-                        has_temporary_limit = true;
-                } else if (option == "--merge-fan-in" && !has_merge_fan_in) {
-                        options.build.merge_fan_in =
-                                parse_merge_fan_in(argv[++argument]);
-                        has_merge_fan_in = true;
+                           !temporary_limit.has_value()) {
+                        temporary_limit = parse_byte_size(argv[++argument]);
+                } else if (option == "--merge-fan-in" &&
+                           !merge_fan_in.has_value()) {
+                        merge_fan_in = parse_merge_fan_in(argv[++argument]);
+                } else if (option == "--memory-limit" &&
+                           !memory_limit.has_value()) {
+                        memory_limit = parse_byte_size(argv[++argument],
+                                                       "--memory-limit");
+                } else if (option == "--threads" &&
+                           !worker_threads.has_value()) {
+                        worker_threads = parse_worker_threads(argv[++argument]);
+                } else if (option == "--profile" && !has_profile) {
+                        options.profile =
+                                parse_resource_profile(argv[++argument]);
+                        has_profile = true;
                 } else if (option == "--index" ||
                            option == "--temporary-space-limit" ||
-                           option == "--merge-fan-in") {
+                           option == "--merge-fan-in" ||
+                           option == "--memory-limit" ||
+                           option == "--threads" || option == "--profile") {
                         throw std::invalid_argument(std::string(option) +
                                                     " may appear only once");
                 } else {
@@ -162,6 +239,19 @@ void print_help() {
         if (!has_index || options.index_directory.empty()) {
                 throw std::invalid_argument(
                         "--index requires one unique directory");
+        }
+        options.build = index::persistent_build_options(options.profile);
+        if (temporary_limit.has_value()) {
+                options.build.temporary_space_budget_bytes = *temporary_limit;
+        }
+        if (merge_fan_in.has_value()) {
+                options.build.merge_fan_in = *merge_fan_in;
+        }
+        if (memory_limit.has_value()) {
+                options.build.memory_budget_bytes = *memory_limit;
+        }
+        if (worker_threads.has_value()) {
+                options.build.worker_thread_count = *worker_threads;
         }
         return options;
 }
@@ -375,6 +465,8 @@ int run_index(const std::filesystem::path &source,
                           << error.message << '\n';
         }
         std::cout << "index=" << result.index_file.string() << '\n'
+                  << "resource_profile="
+                  << resource_profile_name(options.profile) << '\n'
                   << "scanned=" << result.stats.scanned_files << '\n'
                   << "indexed=" << result.stats.indexed_files << '\n'
                   << "failed=" << result.stats.failed_files << '\n'
@@ -391,6 +483,11 @@ int run_index(const std::filesystem::path &source,
                   << result.stats.memory.posting_bytes << '\n'
                   << "memory_estimated_peak_bytes="
                   << result.stats.memory.estimated_peak_bytes << '\n'
+                  << "memory_limit_bytes=" << options.build.memory_budget_bytes
+                  << '\n'
+                  << "memory_peak_bytes=" << result.memory_peak_bytes << '\n'
+                  << "threads=" << result.worker_thread_count << '\n'
+                  << "positions_enabled=" << result.positions_enabled << '\n'
                   << "temporary_segment_count="
                   << result.temporary_segment_count << '\n'
                   << "temporary_peak_bytes=" << result.temporary_peak_bytes

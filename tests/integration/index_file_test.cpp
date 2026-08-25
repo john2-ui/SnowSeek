@@ -1,6 +1,7 @@
 #include "snowseek/document/document_store.hpp"
 #include "snowseek/index/index.hpp"
 #include "snowseek/storage/index_file.hpp"
+#include "snowseek/storage/index_header.hpp"
 
 #include "test_support.hpp"
 
@@ -64,8 +65,7 @@ void make_index(snowseek::document::DocumentStore &documents,
         const auto first = documents.add("a.txt", 12, -10);
         documents.set_token_count(first, 3);
         const auto second = documents.add(
-                std::filesystem::path(std::u8string(u8"目录/文档.txt")), 8,
-                20);
+                std::filesystem::path(std::u8string(u8"目录/文档.txt")), 8, 20);
         documents.set_token_count(second, 1);
         index.add_occurrence("retry", first, 0);
         index.add_occurrence("retry", first, 2);
@@ -105,10 +105,10 @@ void round_trips_complete_index() {
         const auto *retry = loaded.index.find("retry");
         snowseek::test::require(retry != nullptr && retry->size() == 2,
                                 "posting lists should reload");
-        snowseek::test::require_equal((*retry)[0].positions,
-                                      std::vector<snowseek::index::Position>{0,
-                                                                             2},
-                                      "positions should round-trip");
+        snowseek::test::require_equal(
+                (*retry)[0].positions,
+                std::vector<snowseek::index::Position>{0, 2},
+                "positions should round-trip");
         snowseek::test::require_equal(stats.document_count, std::uint64_t{2},
                                       "document statistics should match");
         snowseek::test::require_equal(stats.term_count, std::uint64_t{2},
@@ -125,7 +125,34 @@ void round_trips_complete_index() {
                 "streaming validation should report logical positions");
 }
 
-/** @brief Verifies paths outside valid UTF-8 cannot enter the portable format. */
+/** @brief Verifies the v1 representation without a Positions section. */
+void round_trips_positionless_index() {
+        const TemporaryDirectory temporary;
+        snowseek::document::DocumentStore documents;
+        snowseek::index::InMemoryIndex index(false);
+        make_index(documents, index);
+        const auto path = temporary.path() / "positionless.idx";
+        const auto stats =
+                snowseek::storage::write_index_file(path, documents, index);
+
+        std::ifstream input(path, std::ios::binary);
+        const auto header = snowseek::storage::read_header(input);
+        const auto loaded = snowseek::storage::read_index_file(path);
+        const auto *retry = loaded.index.find("retry");
+        snowseek::test::require(
+                header.feature_flags == 0 &&
+                        header.sections.back().length == 0 &&
+                        stats.position_count == 0 &&
+                        !loaded.index.stores_positions(),
+                "positionless v1 should clear its flag and section");
+        snowseek::test::require(
+                retry != nullptr && (*retry)[0].term_frequency() == 2 &&
+                        (*retry)[0].positions.empty(),
+                "positionless reload should retain frequency only");
+}
+
+/** @brief Verifies paths outside valid UTF-8 cannot enter the portable format.
+ */
 void rejects_non_utf8_paths() {
         const TemporaryDirectory temporary;
         snowseek::document::DocumentStore documents;
@@ -199,6 +226,8 @@ void rejects_corrupted_or_truncated_files() {
 int main() {
         return snowseek::test::run({
                 {"round-trips a complete index", round_trips_complete_index},
+                {"round-trips a positionless index",
+                 round_trips_positionless_index},
                 {"rejects corrupted or truncated files",
                  rejects_corrupted_or_truncated_files},
                 {"rejects non-UTF-8 paths", rejects_non_utf8_paths},
