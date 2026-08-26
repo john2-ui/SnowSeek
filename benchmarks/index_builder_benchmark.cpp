@@ -1,7 +1,8 @@
-#include "snowseek/filesystem/scanner.hpp"
-#include "snowseek/index/index_builder.hpp"
+#include "filesystem/scanner.hpp"
+#include "index/index_builder.hpp"
+#include "storage/index_file.hpp"
 
-#include "snowseek/common/checked_arithmetic.hpp"
+#include "common/checked_arithmetic.hpp"
 
 #include <cerrno>
 #include <charconv>
@@ -239,6 +240,28 @@ void generate_corpus(const std::filesystem::path &source,
 }
 
 /**
+ * @brief Changes one document without changing its byte length or token set.
+ * @param source Existing generated corpus directory.
+ * @param options Corpus dimensions used to reproduce document zero.
+ * @throws std::runtime_error If the fixture cannot be rewritten.
+ */
+void mutate_first_document(const std::filesystem::path &source,
+                           const BenchmarkOptions &options) {
+        auto contents = make_document(
+                0, static_cast<std::size_t>(options.bytes_per_file),
+                options.vocabulary);
+        contents.back() = contents.back() == '\n' ? ' ' : '\n';
+        std::ofstream output(source / "document-0.txt",
+                             std::ios::binary | std::ios::trunc);
+        output.write(contents.data(),
+                     static_cast<std::streamsize>(contents.size()));
+        if (!output) {
+                throw std::runtime_error(
+                        "failed to mutate benchmark document");
+        }
+}
+
+/**
  * @brief Reads Linux process peak resident memory from getrusage.
  * @return Peak RSS in bytes.
  * @throws std::system_error If getrusage fails.
@@ -274,8 +297,8 @@ int run(const BenchmarkOptions &options) {
         const auto started_at = std::chrono::steady_clock::now();
         const auto build_options =
                 snowseek::index::persistent_build_options(options.profile);
-        const auto result = snowseek::index::IndexBuilder(build_options)
-                                    .build(source, destination);
+        const snowseek::index::IndexBuilder builder(build_options);
+        const auto result = builder.build(source, destination);
         const auto elapsed =
                 std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - started_at);
@@ -290,6 +313,22 @@ int run(const BenchmarkOptions &options) {
                                           : static_cast<double>(source_bytes) /
                                                     (1024.0 * 1024.0) /
                                                     elapsed_seconds;
+
+        mutate_first_document(source, options);
+        const auto update_started_at = std::chrono::steady_clock::now();
+        const auto update = builder.update(source, destination);
+        const auto update_elapsed =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - update_started_at);
+        const auto rss_after_update = peak_rss_bytes();
+        const auto compact_started_at = std::chrono::steady_clock::now();
+        const auto compact = builder.compact(destination);
+        const auto compact_elapsed =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - compact_started_at);
+        const auto rss_after_compact = peak_rss_bytes();
+        const auto compacted_index_bytes =
+                std::filesystem::file_size(compact.index_file);
 
         std::cout << "files=" << options.files << '\n'
                   << "resource_profile=" << profile_name(options.profile)
@@ -334,6 +373,28 @@ int run(const BenchmarkOptions &options) {
                   << "rss_peak_bytes=" << rss_peak << '\n'
                   << "rss_increment_bytes="
                   << (rss_peak > rss_before ? rss_peak - rss_before : 0)
+                  << '\n'
+                  << "update_elapsed_us=" << update_elapsed.count() << '\n'
+                  << "update_modified=" << update.modified_files << '\n'
+                  << "update_active_segment_count="
+                  << update.active_segment_count << '\n'
+                  << "update_temporary_peak_bytes="
+                  << update.temporary_peak_bytes << '\n'
+                  << "update_memory_peak_bytes=" << update.memory_peak_bytes
+                  << '\n'
+                  << "rss_peak_after_update_bytes=" << rss_after_update
+                  << '\n'
+                  << "compact_elapsed_us=" << compact_elapsed.count() << '\n'
+                  << "compact_discarded_records="
+                  << compact.discarded_records << '\n'
+                  << "compact_active_segment_count="
+                  << compact.active_segment_count << '\n'
+                  << "compact_temporary_peak_bytes="
+                  << compact.temporary_peak_bytes << '\n'
+                  << "compact_memory_peak_bytes=" << compact.memory_peak_bytes
+                  << '\n'
+                  << "compacted_index_bytes=" << compacted_index_bytes << '\n'
+                  << "rss_peak_after_compact_bytes=" << rss_after_compact
                   << '\n';
         return 0;
 }
