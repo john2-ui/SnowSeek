@@ -1,3 +1,8 @@
+/**
+ * @file document_parser.cpp
+ * @brief Extracts document metadata, tokens, and in-memory index records.
+ */
+
 #include "index/index_builder_internal.hpp"
 
 #include "common/checked_arithmetic.hpp"

@@ -1,3 +1,8 @@
+/**
+ * @file scanner.cpp
+ * @brief Implements recursive source-file discovery and path filtering.
+ */
+
 #include "filesystem/scanner.hpp"
 
 #include <algorithm>

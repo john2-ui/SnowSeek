@@ -1,3 +1,8 @@
+/**
+ * @file index_header.cpp
+ * @brief Encodes and validates the fixed checksummed Segment header.
+ */
+
 #include "storage/index_header.hpp"
 
 #include "storage/binary_codec.hpp"

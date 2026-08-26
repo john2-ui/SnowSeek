@@ -1,3 +1,8 @@
+/**
+ * @file checksum.hpp
+ * @brief Declares incremental and one-shot CRC32C checksum operations.
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -20,7 +25,7 @@ class Crc32c {
         [[nodiscard]] std::uint32_t value() const noexcept;
 
       private:
-        std::uint32_t state_ = 0xffffffffU;
+        std::uint32_t state_ = 0xffffffffU; ///< Running state before final XOR.
 };
 
 /**

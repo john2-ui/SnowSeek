@@ -1,3 +1,8 @@
+/**
+ * @file text_reader.cpp
+ * @brief Implements chunked text reading with streaming UTF-8 validation.
+ */
+
 #include "document/text_reader.hpp"
 
 #include <fstream>
@@ -90,8 +95,8 @@ void handle_invalid_sequence(const std::filesystem::path &path,
 }
 
 struct Utf8State {
-        std::string pending;
-        std::uint64_t pending_offset{};
+        std::string pending; ///< Valid incomplete sequence from the prior chunk.
+        std::uint64_t pending_offset{}; ///< Source offset of pending.front() when nonempty.
 };
 
 /**

@@ -1,3 +1,9 @@
+/**
+ * @file index_header_test.cpp
+ * @brief Verifies index-header serialization, validation, and corruption
+ * detection.
+ */
+
 #include "storage/index_header.hpp"
 
 #include "storage/binary_codec.hpp"

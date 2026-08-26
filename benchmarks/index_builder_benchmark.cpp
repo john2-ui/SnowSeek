@@ -1,3 +1,9 @@
+/**
+ * @file index_builder_benchmark.cpp
+ * @brief Benchmarks index construction for configurable synthetic corpora and
+ * resource profiles.
+ */
+
 #include "filesystem/scanner.hpp"
 #include "index/index_builder.hpp"
 #include "storage/index_file.hpp"
@@ -26,11 +32,10 @@
 namespace {
 
 struct BenchmarkOptions {
-        std::uint64_t files = 1024;
-        std::uint64_t bytes_per_file = 64U * 1024U;
-        std::uint64_t vocabulary = 4096;
-        snowseek::index::ResourceProfile profile{
-                snowseek::index::ResourceProfile::balanced};
+        std::uint64_t files = 1024; ///< Number of source files to generate.
+        std::uint64_t bytes_per_file = 64U * 1024U; ///< Generated file bytes.
+        std::uint64_t vocabulary = 4096; ///< Distinct generated terms.
+        snowseek::index::ResourceProfile profile{snowseek::index::ResourceProfile::balanced}; ///< Build policy.
 };
 
 /** @brief Parses an exact benchmark resource profile. */
@@ -95,7 +100,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Generated workspace root.
 };
 
 /**

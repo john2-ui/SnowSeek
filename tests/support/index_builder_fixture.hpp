@@ -1,3 +1,8 @@
+/**
+ * @file index_builder_fixture.hpp
+ * @brief Provides reusable filesystem fixtures for index-builder tests.
+ */
+
 #pragma once
 
 #include <chrono>
@@ -56,7 +61,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Root directory owned by this fixture.
 };
 
 /**

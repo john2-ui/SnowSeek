@@ -1,3 +1,9 @@
+/**
+ * @file tokenizer_benchmark.cpp
+ * @brief Measures one-shot tokenization throughput for a fixed-size synthetic
+ * input.
+ */
+
 #include "analysis/tokenizer.hpp"
 
 #include <chrono>

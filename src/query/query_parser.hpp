@@ -1,3 +1,8 @@
+/**
+ * @file query_parser.hpp
+ * @brief Defines the normalized query tree and parsing interface.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -22,11 +27,11 @@ enum class QueryNodeKind {
 };
 
 struct QueryNode {
-        QueryNodeKind kind{};
-        std::string value;
-        std::vector<std::string> terms;
-        std::unique_ptr<QueryNode> left;
-        std::unique_ptr<QueryNode> right;
+        QueryNodeKind kind{}; ///< Determines which payload fields are active.
+        std::string value; ///< Normalized term or retained filter value.
+        std::vector<std::string> terms; ///< Normalized phrase terms in order.
+        std::unique_ptr<QueryNode> left; ///< Unary operand or left binary child.
+        std::unique_ptr<QueryNode> right; ///< Right binary child, otherwise null.
 };
 
 /**

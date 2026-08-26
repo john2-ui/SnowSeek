@@ -1,3 +1,8 @@
+/**
+ * @file index_builder.hpp
+ * @brief Declares in-memory and persistent index-building workflows.
+ */
+
 #pragma once
 
 #include "analysis/tokenizer.hpp"
@@ -32,41 +37,41 @@ enum class ResourceProfile {
 };
 
 struct InMemoryBuildOptions {
-        filesystem::ScanOptions scan_options;
-        document::TextReadOptions read_options;
-        analysis::TokenizerOptions tokenizer_options;
-        bool store_positions{true};
+        filesystem::ScanOptions scan_options; ///< File discovery policy.
+        document::TextReadOptions read_options; ///< Text decoding limits.
+        analysis::TokenizerOptions tokenizer_options; ///< Tokenization policy.
+        bool store_positions{true}; ///< Whether postings retain token positions.
 };
 
 struct BuildError {
-        std::filesystem::path path;
-        std::string message;
+        std::filesystem::path path; ///< Candidate associated with the failure.
+        std::string message; ///< Human-readable diagnostic.
 };
 
 struct BuildMemoryStats {
-        std::uint64_t metadata_bytes{};
-        std::uint64_t reader_peak_bytes{};
-        std::uint64_t token_peak_bytes{};
-        std::uint64_t dictionary_bytes{};
-        std::uint64_t posting_bytes{};
-        std::uint64_t estimated_peak_bytes{};
+        std::uint64_t metadata_bytes{}; ///< Retained metadata estimate in bytes.
+        std::uint64_t reader_peak_bytes{}; ///< Peak reader allocation in bytes.
+        std::uint64_t token_peak_bytes{}; ///< Peak token storage in bytes.
+        std::uint64_t dictionary_bytes{}; ///< Peak term-map storage in bytes.
+        std::uint64_t posting_bytes{}; ///< Peak posting storage in bytes.
+        std::uint64_t estimated_peak_bytes{}; ///< Combined logical peak in bytes.
 };
 
 struct InMemoryBuildStats {
-        std::uint64_t scanned_files{};
-        std::uint64_t indexed_files{};
-        std::uint64_t failed_files{};
-        std::uint64_t indexed_bytes{};
-        std::uint64_t token_count{};
-        BuildMemoryStats memory;
+        std::uint64_t scanned_files{}; ///< Candidate files discovered.
+        std::uint64_t indexed_files{}; ///< Documents committed successfully.
+        std::uint64_t failed_files{}; ///< Documents rejected after discovery.
+        std::uint64_t indexed_bytes{}; ///< Source bytes committed.
+        std::uint64_t token_count{}; ///< Tokens committed across documents.
+        BuildMemoryStats memory; ///< Logical memory observations.
 };
 
 struct InMemoryBuildResult {
-        document::DocumentStore documents;
-        InMemoryIndex index;
-        std::vector<filesystem::ScanError> scan_errors;
-        std::vector<BuildError> document_errors;
-        InMemoryBuildStats stats;
+        document::DocumentStore documents; ///< Successfully parsed documents.
+        InMemoryIndex index; ///< Postings for successful documents.
+        std::vector<filesystem::ScanError> scan_errors; ///< Discovery failures.
+        std::vector<BuildError> document_errors; ///< Per-document failures.
+        InMemoryBuildStats stats; ///< Aggregate build measurements.
 };
 
 class InMemoryIndexBuilder {
@@ -95,44 +100,44 @@ class InMemoryIndexBuilder {
         build(const std::filesystem::path &source) const;
 
       private:
-        InMemoryBuildOptions options_;
+        InMemoryBuildOptions options_; ///< Validated immutable build policy.
 };
 
 struct PersistentBuildResult {
-        std::filesystem::path index_file;
-        storage::SegmentId segment_id{};
-        std::uint64_t manifest_generation{};
-        bool published{};
-        bool compacted{};
-        std::uint64_t active_segment_count{};
-        std::uint64_t added_files{};
-        std::uint64_t modified_files{};
-        std::uint64_t removed_files{};
-        std::uint64_t unchanged_files{};
-        std::uint64_t matched_files{};
-        std::uint64_t discarded_records{};
-        InMemoryBuildStats stats;
-        std::vector<filesystem::ScanError> scan_errors;
-        std::vector<BuildError> document_errors;
-        std::vector<BuildError> cleanup_errors;
-        std::vector<BuildError> maintenance_errors;
-        std::uint64_t temporary_segment_count{};
-        std::uint64_t temporary_peak_bytes{};
-        std::uint64_t merge_pass_count{};
-        std::uint64_t memory_peak_bytes{};
-        std::size_t worker_thread_count{};
-        bool positions_enabled{true};
+        std::filesystem::path index_file; ///< Published Segment path, if any.
+        storage::SegmentId segment_id{}; ///< Published Segment identifier.
+        std::uint64_t manifest_generation{}; ///< Selected Manifest generation.
+        bool published{}; ///< Whether a new generation was committed.
+        bool compacted{}; ///< Whether active records were consolidated.
+        std::uint64_t active_segment_count{}; ///< Segments in the selected view.
+        std::uint64_t added_files{}; ///< Newly indexed live paths.
+        std::uint64_t modified_files{}; ///< Reindexed existing live paths.
+        std::uint64_t removed_files{}; ///< Tombstoned live paths.
+        std::uint64_t unchanged_files{}; ///< Live paths reused unchanged.
+        std::uint64_t matched_files{}; ///< Live paths selected for removal.
+        std::uint64_t discarded_records{}; ///< Obsolete records dropped.
+        InMemoryBuildStats stats; ///< Content and memory measurements.
+        std::vector<filesystem::ScanError> scan_errors; ///< Discovery failures.
+        std::vector<BuildError> document_errors; ///< Per-document failures.
+        std::vector<BuildError> cleanup_errors; ///< Post-publication cleanup failures.
+        std::vector<BuildError> maintenance_errors; ///< Recoverable maintenance failures.
+        std::uint64_t temporary_segment_count{}; ///< Segments emitted before merge.
+        std::uint64_t temporary_peak_bytes{}; ///< Peak workspace bytes.
+        std::uint64_t merge_pass_count{}; ///< Merge levels completed.
+        std::uint64_t memory_peak_bytes{}; ///< Peak charged memory bytes.
+        std::size_t worker_thread_count{}; ///< Parsing workers used.
+        bool positions_enabled{true}; ///< Whether published postings have token positions.
 };
 
 struct PersistentBuildOptions {
-        InMemoryBuildOptions in_memory_options;
-        std::uint64_t segment_flush_threshold_bytes{
-                kDefaultSegmentFlushThresholdBytes};
-        std::uint64_t temporary_space_budget_bytes{
-                kDefaultTemporarySpaceBudgetBytes};
-        std::size_t merge_fan_in{kDefaultMergeFanIn};
-        std::uint64_t memory_budget_bytes{kDefaultMemoryBudgetBytes};
-        std::size_t worker_thread_count{kDefaultWorkerThreadCount};
+        InMemoryBuildOptions in_memory_options; ///< Scan, read, and token policy.
+        std::uint64_t
+                segment_flush_threshold_bytes{kDefaultSegmentFlushThresholdBytes}; ///< Flush cap.
+        std::uint64_t
+                temporary_space_budget_bytes{kDefaultTemporarySpaceBudgetBytes}; ///< Workspace cap.
+        std::size_t merge_fan_in{kDefaultMergeFanIn}; ///< Inputs per merge group.
+        std::uint64_t memory_budget_bytes{kDefaultMemoryBudgetBytes}; ///< Logical byte limit.
+        std::size_t worker_thread_count{kDefaultWorkerThreadCount}; ///< Concurrent parsers.
 };
 
 /**
@@ -204,7 +209,7 @@ class IndexBuilder {
         compact(const std::filesystem::path &index_directory) const;
 
       private:
-        PersistentBuildOptions options_;
+        PersistentBuildOptions options_; ///< Validated immutable build policy.
 };
 
 } // namespace snowseek::index

@@ -1,3 +1,8 @@
+/**
+ * @file index_builder_test.cpp
+ * @brief Exercises end-to-end in-memory and persistent index construction.
+ */
+
 #include "index/index_builder.hpp"
 #include "storage/index_file.hpp"
 

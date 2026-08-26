@@ -1,3 +1,8 @@
+/**
+ * @file index_file_validation_test.cpp
+ * @brief Exercises index-file compatibility checks and corruption diagnostics.
+ */
+
 #include "storage/index_file.hpp"
 #include "storage/index_header.hpp"
 

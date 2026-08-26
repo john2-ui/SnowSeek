@@ -1,3 +1,8 @@
+/**
+ * @file index_header.hpp
+ * @brief Defines the fixed Segment header layout and stream codec.
+ */
+
 #pragma once
 
 #include <array>
@@ -29,17 +34,19 @@ inline constexpr std::array<SectionKind, kIndexSectionCount> kIndexSectionOrder{
         SectionKind::postings, SectionKind::positions};
 
 struct SectionDescriptor {
-        SectionKind kind{};
-        std::uint64_t offset{};
-        std::uint64_t length{};
-        std::uint32_t checksum{};
+        SectionKind kind{}; ///< Section identity in canonical storage order.
+        std::uint64_t offset{}; ///< Absolute byte offset from the file start.
+        std::uint64_t length{}; ///< Serialized section length in bytes.
+        std::uint32_t checksum{}; ///< CRC32C of the serialized section bytes.
 };
 
 struct IndexHeader {
-        std::uint32_t version = kIndexFormatVersion;
-        std::uint32_t feature_flags = kFeaturePositions;
-        std::uint64_t file_size = kIndexHeaderSize;
-        std::array<SectionDescriptor, kIndexSectionCount> sections{{
+        std::uint32_t version = kIndexFormatVersion; ///< On-disk Segment format version.
+        std::uint32_t feature_flags = kFeaturePositions; ///< Enabled format capabilities.
+        std::uint64_t file_size = kIndexHeaderSize; ///< Exact complete file size in bytes.
+        std::array<SectionDescriptor, kIndexSectionCount>
+                sections ///< Packed descriptors in canonical section order.
+                {{
                 {SectionKind::documents, kIndexHeaderSize, 0, 0},
                 {SectionKind::paths, kIndexHeaderSize, 0, 0},
                 {SectionKind::terms, kIndexHeaderSize, 0, 0},

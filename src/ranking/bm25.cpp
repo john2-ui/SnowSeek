@@ -1,3 +1,8 @@
+/**
+ * @file bm25.cpp
+ * @brief Implements BM25 relevance scoring for individual query terms.
+ */
+
 #include "ranking/bm25.hpp"
 
 #include <cmath>

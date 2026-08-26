@@ -1,3 +1,8 @@
+/**
+ * @file index_manifest.cpp
+ * @brief Encodes, decodes, and reads checksummed index Manifests.
+ */
+
 #include "storage/index_manifest.hpp"
 
 #include "storage/binary_codec.hpp"

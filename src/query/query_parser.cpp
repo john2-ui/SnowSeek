@@ -1,3 +1,8 @@
+/**
+ * @file query_parser.cpp
+ * @brief Tokenizes and parses Boolean query expressions into syntax trees.
+ */
+
 #include "query/query_parser.hpp"
 
 #include "analysis/tokenizer.hpp"
@@ -26,9 +31,9 @@ enum class TokenKind {
 };
 
 struct LexToken {
-        TokenKind kind{};
-        std::string text;
-        std::size_t offset{};
+        TokenKind kind{}; ///< Lexical category used by the parser.
+        std::string text; ///< Decoded token payload when applicable.
+        std::size_t offset{}; ///< Starting byte offset in the expression.
 };
 
 /**
@@ -225,8 +230,8 @@ class Lexer {
                        starts_with_ascii_case_insensitive(text, keyword);
         }
 
-        std::string_view input_;
-        std::size_t position_{};
+        std::string_view input_; ///< Non-owning expression bytes.
+        std::size_t position_{}; ///< Offset of the next unread byte.
 };
 
 /**
@@ -426,10 +431,10 @@ class Parser {
         /** @brief Consumes the current lookahead token. */
         void advance() { current_ = lexer_.next(); }
 
-        Lexer lexer_;
-        LexToken current_;
-        analysis::Tokenizer tokenizer_;
-        std::size_t nesting_depth_{};
+        Lexer lexer_; ///< Produces source-ordered lookahead tokens.
+        LexToken current_; ///< Current unconsumed lookahead token.
+        analysis::Tokenizer tokenizer_; ///< Normalizes searchable text.
+        std::size_t nesting_depth_{}; ///< Active unary and group nesting.
 };
 
 } // namespace

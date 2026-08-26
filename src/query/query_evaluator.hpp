@@ -1,3 +1,8 @@
+/**
+ * @file query_evaluator.hpp
+ * @brief Declares Boolean query evaluation over documents and postings.
+ */
+
 #pragma once
 
 #include "query/query_parser.hpp"

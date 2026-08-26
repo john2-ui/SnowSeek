@@ -1,3 +1,8 @@
+/**
+ * @file main.cpp
+ * @brief Forwards the process entry point to the SnowSeek CLI application.
+ */
+
 #include "cli/application.hpp"
 
 /**

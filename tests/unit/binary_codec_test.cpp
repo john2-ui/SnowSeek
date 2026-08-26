@@ -1,3 +1,9 @@
+/**
+ * @file binary_codec_test.cpp
+ * @brief Verifies little-endian binary encoding, decoding, and failure
+ * handling.
+ */
+
 #include "storage/binary_codec.hpp"
 
 #include "test_support.hpp"

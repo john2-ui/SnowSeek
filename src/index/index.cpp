@@ -1,3 +1,8 @@
+/**
+ * @file index.cpp
+ * @brief Implements in-memory inverted-index storage and accounting.
+ */
+
 #include "index/index.hpp"
 
 #include "common/checked_arithmetic.hpp"

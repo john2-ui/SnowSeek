@@ -1,3 +1,8 @@
+/**
+ * @file binary_codec.cpp
+ * @brief Implements fixed-width little-endian stream encoding helpers.
+ */
+
 #include "storage/binary_codec.hpp"
 
 #include <cstdint>

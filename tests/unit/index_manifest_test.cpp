@@ -1,3 +1,8 @@
+/**
+ * @file index_manifest_test.cpp
+ * @brief Verifies manifest serialization, validation, and corruption detection.
+ */
+
 #include "storage/checksum.hpp"
 #include "storage/index_manifest.hpp"
 

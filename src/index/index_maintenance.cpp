@@ -1,3 +1,8 @@
+/**
+ * @file index_maintenance.cpp
+ * @brief Implements persistent index update, removal, and compaction.
+ */
+
 #include "index/index_builder_internal.hpp"
 
 #include "common/checked_arithmetic.hpp"
@@ -36,18 +41,18 @@ using common::detail::checked_add;
 using common::detail::checked_multiply;
 
 struct FileFingerprint {
-        builder_detail::FileMetadata metadata;
-        std::uint32_t content_crc32c{};
+        builder_detail::FileMetadata metadata; ///< Stable size and modification time.
+        std::uint32_t content_crc32c{}; ///< CRC32C of raw source bytes.
 };
 
 struct LiveDeltaRecord {
-        std::filesystem::path relative_path;
-        std::filesystem::path source_path;
-        FileFingerprint fingerprint;
+        std::filesystem::path relative_path; ///< Logical path stored in the index.
+        std::filesystem::path source_path; ///< Physical file selected for parsing.
+        FileFingerprint fingerprint; ///< Stable identity verified before commit.
 };
 
 struct TombstoneRecord {
-        std::filesystem::path relative_path;
+        std::filesystem::path relative_path; ///< Logical path made invisible.
 };
 
 using PendingRecord = std::variant<LiveDeltaRecord, TombstoneRecord>;
@@ -58,12 +63,13 @@ enum class PublicationMode {
 };
 
 struct UpdatePlan {
-        std::vector<PendingRecord> records;
-        PublicationMode publication_mode{PublicationMode::append_delta};
-        std::uint64_t added_files{};
-        std::uint64_t modified_files{};
-        std::uint64_t removed_files{};
-        std::uint64_t unchanged_files{};
+        std::vector<PendingRecord> records; ///< Ordered delta records to publish.
+        PublicationMode
+                publication_mode{PublicationMode::append_delta}; ///< Manifest update strategy.
+        std::uint64_t added_files{}; ///< New live paths in the plan.
+        std::uint64_t modified_files{}; ///< Existing paths to replace.
+        std::uint64_t removed_files{}; ///< Existing paths to tombstone.
+        std::uint64_t unchanged_files{}; ///< Existing paths retained as-is.
 
         /** @brief Returns whether the plan must publish a new generation. */
         [[nodiscard]] bool requires_publication() const noexcept {

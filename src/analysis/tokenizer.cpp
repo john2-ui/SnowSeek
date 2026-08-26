@@ -1,3 +1,8 @@
+/**
+ * @file tokenizer.cpp
+ * @brief Implements streaming token normalization and position tracking.
+ */
+
 #include "analysis/tokenizer.hpp"
 
 #include <limits>

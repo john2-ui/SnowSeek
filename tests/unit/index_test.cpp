@@ -1,3 +1,9 @@
+/**
+ * @file index_test.cpp
+ * @brief Verifies in-memory posting construction, lookup, and document
+ * statistics.
+ */
+
 #include "index/index.hpp"
 
 #include "test_support.hpp"

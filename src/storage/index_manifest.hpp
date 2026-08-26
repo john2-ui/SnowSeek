@@ -1,3 +1,8 @@
+/**
+ * @file index_manifest.hpp
+ * @brief Defines Manifest metadata and its validated storage codec.
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -15,9 +20,9 @@ inline constexpr std::uint32_t kManifestFormatVersion = 1;
 inline constexpr std::uint32_t kManifestHeaderSize = 64;
 
 struct IndexManifest {
-        std::uint64_t generation{};
-        SegmentId next_segment_id{};
-        std::vector<SegmentId> active_segments;
+        std::uint64_t generation{}; ///< Nonzero publication generation.
+        SegmentId next_segment_id{}; ///< Persistent identifier allocation floor.
+        std::vector<SegmentId> active_segments; ///< Strictly increasing selected Segment IDs.
 };
 
 /**

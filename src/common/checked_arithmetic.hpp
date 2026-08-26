@@ -1,3 +1,8 @@
+/**
+ * @file checked_arithmetic.hpp
+ * @brief Provides checked unsigned arithmetic for persistent counters.
+ */
+
 #pragma once
 
 #include <cstdint>

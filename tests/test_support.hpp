@@ -1,3 +1,9 @@
+/**
+ * @file test_support.hpp
+ * @brief Provides lightweight assertions and a shared runner for SnowSeek
+ * tests.
+ */
+
 #pragma once
 
 #include <exception>
@@ -13,8 +19,8 @@ namespace snowseek::test {
 using TestFunction = void (*)();
 
 struct TestCase {
-        std::string_view name;
-        TestFunction function;
+        std::string_view name; ///< Human-readable name reported by the runner.
+        TestFunction function; ///< Test entry point invoked by the runner.
 };
 
 /**

@@ -1,3 +1,9 @@
+/**
+ * @file text_pipeline_test.cpp
+ * @brief Verifies streamed text reading and tokenization as an integrated
+ * pipeline.
+ */
+
 #include "analysis/tokenizer.hpp"
 #include "document/text_reader.hpp"
 
@@ -52,7 +58,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Pipeline fixture root.
 };
 
 /** @brief Verifies equivalence between streamed and one-shot tokenization. */

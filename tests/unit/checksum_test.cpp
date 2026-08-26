@@ -1,3 +1,8 @@
+/**
+ * @file checksum_test.cpp
+ * @brief Verifies one-shot and incremental CRC32C checksum behavior.
+ */
+
 #include "storage/checksum.hpp"
 
 #include "test_support.hpp"

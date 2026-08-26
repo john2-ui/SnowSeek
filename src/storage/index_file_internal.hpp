@@ -1,3 +1,8 @@
+/**
+ * @file index_file_internal.hpp
+ * @brief Declares internal bounded Segment I/O and validation helpers.
+ */
+
 #pragma once
 
 #include "storage/index_file.hpp"
@@ -15,10 +20,10 @@ namespace snowseek::storage::detail {
 
 /** @brief A fully validated Segment document table without query postings. */
 struct LoadedDocumentTable {
-        document::DocumentStore documents;
-        std::vector<std::uint64_t> token_counts;
-        SegmentStats stats;
-        bool stores_positions{};
+        document::DocumentStore documents; ///< Physical records in local ID order.
+        std::vector<std::uint64_t> token_counts; ///< Counts indexed by local document ID.
+        SegmentStats stats; ///< Validated physical Segment totals.
+        bool stores_positions{}; ///< Whether Posting offsets reference Position data.
 };
 
 /**

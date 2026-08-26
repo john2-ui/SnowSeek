@@ -1,3 +1,8 @@
+/**
+ * @file bm25_test.cpp
+ * @brief Verifies BM25 scoring boundaries, reference values, and monotonicity.
+ */
+
 #include "ranking/bm25.hpp"
 
 #include "test_support.hpp"

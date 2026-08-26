@@ -1,3 +1,9 @@
+/**
+ * @file document_store_test.cpp
+ * @brief Verifies document identifier allocation, metadata storage, and bounds
+ * checks.
+ */
+
 #include "document/document_store.hpp"
 
 #include "test_support.hpp"

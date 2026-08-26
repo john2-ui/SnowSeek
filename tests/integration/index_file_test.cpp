@@ -1,3 +1,9 @@
+/**
+ * @file index_file_test.cpp
+ * @brief Verifies deterministic index-file serialization and logical round
+ * trips.
+ */
+
 #include "storage/index_file.hpp"
 #include "storage/index_header.hpp"
 

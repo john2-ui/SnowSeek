@@ -1,3 +1,8 @@
+/**
+ * @file tokenizer.hpp
+ * @brief Declares one-shot and streaming text tokenization interfaces.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -10,12 +15,12 @@
 namespace snowseek::analysis {
 
 struct TokenizerOptions {
-        std::size_t max_token_length = 256;
+        std::size_t max_token_length = 256; ///< Maximum ASCII token bytes.
 };
 
 struct Token {
-        std::string term;
-        std::uint32_t position{};
+        std::string term;        ///< Lowercase normalized token text.
+        std::uint32_t position{}; ///< Zero-based ordinal in the document.
 };
 
 using TokenConsumer = std::function<void(Token)>;
@@ -55,10 +60,10 @@ class TokenizerSession {
          */
         void emit_pending(const TokenConsumer &consumer);
 
-        TokenizerOptions options_;
-        std::string pending_;
-        std::uint64_t next_position_{};
-        bool finished_ = false;
+        TokenizerOptions options_; ///< Token limits fixed for the session.
+        std::string pending_;       ///< Normalized token bytes retained until emission.
+        std::uint64_t next_position_{}; ///< Ordinal assigned on next emission.
+        bool finished_ = false; ///< Whether final input has been consumed.
 };
 
 class Tokenizer {
@@ -87,7 +92,7 @@ class Tokenizer {
         tokenize_with_positions(std::string_view text) const;
 
       private:
-        TokenizerOptions options_;
+        TokenizerOptions options_; ///< Limits copied into each new session.
 };
 
 } // namespace snowseek::analysis

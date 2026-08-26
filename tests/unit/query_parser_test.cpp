@@ -1,3 +1,8 @@
+/**
+ * @file query_parser_test.cpp
+ * @brief Verifies query parsing precedence, syntax, and validation behavior.
+ */
+
 #include "query/query_parser.hpp"
 
 #include "test_support.hpp"

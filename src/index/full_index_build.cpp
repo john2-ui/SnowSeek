@@ -1,3 +1,8 @@
+/**
+ * @file full_index_build.cpp
+ * @brief Coordinates complete in-memory and persistent index builds.
+ */
+
 #include "index/index_builder_internal.hpp"
 
 #include "common/checked_arithmetic.hpp"
@@ -308,15 +313,15 @@ using common::detail::checked_add;
 using common::detail::checked_multiply;
 
 struct ParseFailure {
-        std::string message;
-        BuildMemoryStats memory_stats;
+        std::string message; ///< Recoverable per-document diagnostic.
+        BuildMemoryStats memory_stats; ///< Memory observed before failure.
 };
 
 using ParseTaskResult = std::variant<ParsedDocument, ParseFailure>;
 
 struct ParseWaveResult {
-        std::vector<ParseTaskResult> outcomes;
-        std::exception_ptr fatal_error;
+        std::vector<ParseTaskResult> outcomes; ///< Results in scanner order.
+        std::exception_ptr fatal_error; ///< Deferred hard worker failure.
 };
 
 /**
@@ -624,20 +629,20 @@ class SegmentBatch {
                 metadata_memory_.resize(bytes);
         }
 
-        bool store_positions_{};
-        std::uint64_t flush_threshold_bytes_{};
-        BuildWorkspace &workspace_;
-        BuildMemoryBudget &memory_budget_;
-        const std::vector<std::filesystem::path> &scan_paths_;
-        const std::vector<filesystem::ScanError> &scan_errors_;
-        const std::vector<BuildError> &document_errors_;
-        InMemoryBuildStats &stats_;
-        document::DocumentStore documents_;
-        InMemoryIndex index_;
-        std::vector<storage::detail::SegmentSource> segments_;
-        MemoryReservation metadata_memory_;
-        MemoryReservation active_memory_;
-        std::uint64_t peak_document_bytes_{};
+        bool store_positions_{}; ///< Whether emitted postings retain token positions.
+        std::uint64_t flush_threshold_bytes_{}; ///< Retained-byte flush boundary.
+        BuildWorkspace &workspace_; ///< Workspace owning emitted Segments.
+        BuildMemoryBudget &memory_budget_; ///< Shared logical-memory limit.
+        const std::vector<std::filesystem::path> &scan_paths_; ///< Retained candidates.
+        const std::vector<filesystem::ScanError> &scan_errors_; ///< Retained scan failures.
+        const std::vector<BuildError> &document_errors_; ///< Retained parse failures.
+        InMemoryBuildStats &stats_; ///< Aggregate statistics updated on commit.
+        document::DocumentStore documents_; ///< Documents in the active batch.
+        InMemoryIndex index_; ///< Postings in the active batch.
+        std::vector<storage::detail::SegmentSource> segments_; ///< Completed batches.
+        MemoryReservation metadata_memory_; ///< Charge for retained metadata.
+        MemoryReservation active_memory_; ///< Charge for active batch content.
+        std::uint64_t peak_document_bytes_{}; ///< Peak document-table bytes.
 };
 
 /**
@@ -695,8 +700,8 @@ void commit_document_wave(const std::vector<std::filesystem::path> &paths,
 }
 
 struct CandidateBuildStats {
-        std::uint64_t segment_source_bytes{};
-        std::uint64_t merge_memory_bytes{};
+        std::uint64_t segment_source_bytes{}; ///< Bytes retained by Segment descriptors.
+        std::uint64_t merge_memory_bytes{}; ///< Peak merge-buffer estimate.
 };
 
 /**

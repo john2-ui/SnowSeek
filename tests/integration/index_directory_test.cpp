@@ -1,3 +1,9 @@
+/**
+ * @file index_directory_test.cpp
+ * @brief Verifies index-directory publication, recovery, and generation
+ * management.
+ */
+
 #include "index/index_builder.hpp"
 #include "storage/index_file.hpp"
 #include "storage/index_manifest.hpp"

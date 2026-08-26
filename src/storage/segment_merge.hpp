@@ -1,3 +1,8 @@
+/**
+ * @file segment_merge.hpp
+ * @brief Declares bounded merging of immutable Segment files.
+ */
+
 #pragma once
 
 #include "storage/index_file.hpp"
@@ -10,9 +15,8 @@
 namespace snowseek::storage::detail {
 
 struct SegmentSource {
-        std::filesystem::path path;
-        /** Validated physical statistics for this Segment. */
-        SegmentStats stats;
+        std::filesystem::path path; ///< Existing validated Segment file.
+        SegmentStats stats; ///< Validated physical statistics for the Segment.
 };
 
 /**

@@ -1,3 +1,8 @@
+/**
+ * @file application.cpp
+ * @brief Parses SnowSeek commands and renders command-line results.
+ */
+
 #include "cli/application.hpp"
 
 #include "snowseek/index.hpp"
@@ -36,18 +41,18 @@ enum class MaintenanceCommand {
 };
 
 struct SourceCommandOptions {
-        std::filesystem::path index_directory;
-        IndexOptions index;
+        std::filesystem::path index_directory; ///< Destination index path.
+        IndexOptions index; ///< Resource settings for the maintenance command.
 };
 
 struct RemoveCommandOptions {
-        IndexOptions index;
-        std::vector<std::string> path_patterns;
+        IndexOptions index; ///< Resource settings for deletion publication.
+        std::vector<std::string> path_patterns; ///< POSIX Globs to Tombstone.
 };
 
 struct QueryCommandOptions {
-        SearchOptions search;
-        QueryOutputFormat output = QueryOutputFormat::rich_text;
+        SearchOptions search; ///< Result and presentation-data settings.
+        QueryOutputFormat output = QueryOutputFormat::rich_text; ///< Selected output encoding.
 };
 
 /** @brief Prints command-line usage and the current program version. */
@@ -185,8 +190,8 @@ parse_byte_size(std::string_view text,
 }
 
 struct ResourceParseState {
-        IndexOptions options;
-        bool has_profile{};
+        IndexOptions options; ///< Shared resource values parsed so far.
+        bool has_profile{};   ///< Whether --profile was already consumed.
 };
 
 /**

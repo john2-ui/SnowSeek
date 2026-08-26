@@ -1,3 +1,8 @@
+/**
+ * @file public_version_header.cpp
+ * @brief Checks that the public version header is self-contained and accurate.
+ */
+
 #include "snowseek/version.hpp"
 
 #include <string_view>

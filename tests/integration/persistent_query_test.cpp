@@ -1,3 +1,9 @@
+/**
+ * @file persistent_query_test.cpp
+ * @brief Exercises persistent indexing and public search semantics across
+ * reopen.
+ */
+
 #include "snowseek/index.hpp"
 #include "snowseek/search.hpp"
 
@@ -39,7 +45,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Source and index fixture root.
 };
 
 /** @brief Writes a corpus text fixture. */

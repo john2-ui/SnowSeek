@@ -1,3 +1,9 @@
+/**
+ * @file cli_test.cpp
+ * @brief Exercises CLI indexing, maintenance, search output, and error
+ * handling.
+ */
+
 #include "cli/application.hpp"
 
 #include "test_support.hpp"
@@ -15,9 +21,9 @@
 namespace {
 
 struct InvocationResult {
-        int status{};
-        std::string output;
-        std::string error;
+        int status{};       ///< Exit status returned by the CLI entry point.
+        std::string output; ///< Text captured from standard output.
+        std::string error;  ///< Text captured from standard error.
 };
 
 class TemporaryDirectory {
@@ -44,7 +50,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Root directory for CLI fixtures.
 };
 
 /** @brief Invokes the CLI entry point with writable argument pointers. */

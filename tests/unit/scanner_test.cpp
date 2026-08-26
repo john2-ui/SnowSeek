@@ -1,3 +1,9 @@
+/**
+ * @file scanner_test.cpp
+ * @brief Verifies recursive filesystem scanning, limits, and diagnostic
+ * handling.
+ */
+
 #include "filesystem/scanner.hpp"
 
 #include "test_support.hpp"
@@ -50,7 +56,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Root directory for scanner fixtures.
 };
 
 /**

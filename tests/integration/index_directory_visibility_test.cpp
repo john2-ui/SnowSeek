@@ -1,3 +1,9 @@
+/**
+ * @file index_directory_visibility_test.cpp
+ * @brief Verifies reader visibility rules for manifest-backed index
+ * directories.
+ */
+
 #include "storage/index_file.hpp"
 #include "storage/index_manifest.hpp"
 

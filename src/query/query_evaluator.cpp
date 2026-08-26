@@ -1,3 +1,8 @@
+/**
+ * @file query_evaluator.cpp
+ * @brief Evaluates Boolean query trees against an immutable in-memory corpus.
+ */
+
 #include "query/query_evaluator.hpp"
 
 #include "document/document_store.hpp"
@@ -382,9 +387,9 @@ class Evaluator {
                 return documents_.size();
         }
 
-        const document::DocumentStore &documents_;
-        const index::InMemoryIndex &index_;
-        DocumentIds universe_;
+        const document::DocumentStore &documents_; ///< Immutable visible corpus.
+        const index::InMemoryIndex &index_; ///< Immutable visible postings.
+        DocumentIds universe_; ///< Every visible identifier in order.
 };
 
 } // namespace

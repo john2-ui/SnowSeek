@@ -1,3 +1,9 @@
+/**
+ * @file storage_test_fixture.hpp
+ * @brief Provides binary index fixtures and mutation helpers for storage
+ * integration tests.
+ */
+
 #pragma once
 
 #include "document/document_store.hpp"
@@ -52,7 +58,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Root directory owned by this fixture.
 };
 
 /**

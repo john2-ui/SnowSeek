@@ -1,3 +1,8 @@
+/**
+ * @file index_directory_internal.hpp
+ * @brief Declares internal index-directory loading and publication utilities.
+ */
+
 #pragma once
 
 #include "storage/index_file.hpp"
@@ -26,8 +31,8 @@ using PublishObserver = void (*)(PublishObservationPoint);
 void set_publish_observer(PublishObserver observer) noexcept;
 
 struct PublicationDiagnostic {
-        std::filesystem::path path;
-        std::string message;
+        std::filesystem::path path; ///< Path associated with the nonfatal failure.
+        std::string message; ///< Human-readable nonfatal failure description.
 };
 
 /** @brief Owns one POSIX file descriptor and closes it at scope exit. */
@@ -69,7 +74,7 @@ class UniqueFd {
         void close_checked(const std::filesystem::path &path);
 
       private:
-        int fd_{-1};
+        int fd_{-1}; ///< Owned POSIX descriptor, or -1 when empty.
 };
 
 /**
@@ -126,12 +131,12 @@ class IndexDirectoryTransaction {
                 std::string_view manifest_bytes);
 
       private:
-        std::filesystem::path directory_;
-        std::vector<SegmentId> active_segments_;
-        UniqueFd directory_fd_;
-        SegmentId segment_id_{};
-        std::uint64_t generation_{};
-        std::uint64_t current_generation_{};
+        std::filesystem::path directory_; ///< Locked index directory.
+        std::vector<SegmentId> active_segments_; ///< Active IDs observed at lock acquisition.
+        UniqueFd directory_fd_; ///< Directory descriptor carrying the writer lock.
+        SegmentId segment_id_{}; ///< Identifier reserved for the candidate Segment.
+        std::uint64_t generation_{}; ///< Manifest generation to publish.
+        std::uint64_t current_generation_{}; ///< Generation observed at lock acquisition.
 };
 
 } // namespace snowseek::storage::detail

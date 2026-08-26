@@ -1,3 +1,8 @@
+/**
+ * @file binary_codec.hpp
+ * @brief Declares fixed-width little-endian stream encoding helpers.
+ */
+
 #pragma once
 
 #include <cstdint>

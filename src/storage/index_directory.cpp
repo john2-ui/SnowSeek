@@ -1,3 +1,8 @@
+/**
+ * @file index_directory.cpp
+ * @brief Loads, resolves, recovers, and durably publishes index directories.
+ */
+
 #include "storage/index_file.hpp"
 
 #include "common/checked_arithmetic.hpp"
@@ -144,8 +149,8 @@ void write_all(int fd, std::string_view bytes,
 }
 
 struct ManifestTemporary {
-        detail::UniqueFd fd;
-        std::filesystem::path path;
+        detail::UniqueFd fd; ///< Owned descriptor for the staging file.
+        std::filesystem::path path; ///< Exact staging path in the index directory.
 };
 
 /**
@@ -237,19 +242,19 @@ constexpr auto kDroppedDocument =
         std::numeric_limits<std::uint64_t>::max();
 
 struct DocumentWinner {
-        std::size_t segment{};
-        document::DocumentId document{};
+        std::size_t segment{}; ///< Index of the newest Segment containing the path.
+        document::DocumentId document{}; ///< Winning Segment-local identifier.
 };
 
 struct VisibilityPlan {
-        document::DocumentStore documents;
-        std::vector<std::vector<std::uint64_t>> remaps;
+        document::DocumentStore documents; ///< Visible live records in global ID order.
+        std::vector<std::vector<std::uint64_t>> remaps; ///< IDs; kDroppedDocument marks hidden records.
 };
 
 /** @brief Non-owning view of one loaded document and posting set. */
 struct LoadedSetView {
-        const document::DocumentStore &documents;
-        const index::InMemoryIndex &index;
+        const document::DocumentStore &documents; ///< Borrowed document records.
+        const index::InMemoryIndex &index; ///< Borrowed postings for that table.
 };
 
 /**
@@ -518,9 +523,9 @@ load_active_segments(const std::vector<std::filesystem::path> &paths) {
 }
 
 struct CurrentDirectoryState {
-        std::optional<IndexManifest> manifest;
-        std::vector<SegmentId> active_segments;
-        std::uint64_t generation{};
+        std::optional<IndexManifest> manifest; ///< Current Manifest when one exists.
+        std::vector<SegmentId> active_segments; ///< IDs protected by the current state.
+        std::uint64_t generation{}; ///< Current Manifest generation, or zero if absent.
 };
 
 /**
@@ -570,8 +575,8 @@ load_current_directory_state(const std::filesystem::path &directory) {
 }
 
 struct RecoveryScan {
-        SegmentId maximum_seen{};
-        std::vector<std::filesystem::path> stale_paths;
+        SegmentId maximum_seen{}; ///< Largest persistent Segment ID encountered.
+        std::vector<std::filesystem::path> stale_paths; ///< Recognized orphan paths to remove.
 };
 
 /**
@@ -606,8 +611,8 @@ struct RecoveryScan {
 }
 
 struct TransactionIdentifiers {
-        SegmentId segment_id{};
-        std::uint64_t generation{};
+        SegmentId segment_id{}; ///< Unused ID reserved for the candidate Segment.
+        std::uint64_t generation{}; ///< Next Manifest generation to publish.
 };
 
 /**

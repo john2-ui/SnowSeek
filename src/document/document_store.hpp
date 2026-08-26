@@ -1,3 +1,8 @@
+/**
+ * @file document_store.hpp
+ * @brief Declares the in-memory table of indexed document metadata.
+ */
+
 #pragma once
 
 #include "document/document.hpp"
@@ -77,7 +82,7 @@ class DocumentStore {
         [[nodiscard]] std::uint64_t estimated_memory_bytes() const;
 
       private:
-        std::vector<DocumentMeta> documents_;
+        std::vector<DocumentMeta> documents_; ///< Records in DocumentId order.
 };
 
 } // namespace snowseek::document

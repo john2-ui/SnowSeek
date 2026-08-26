@@ -1,3 +1,9 @@
+/**
+ * @file public_api_test.cpp
+ * @brief Aggregates independent compilation checks for the public SnowSeek
+ * headers.
+ */
+
 #include "test_support.hpp"
 
 namespace snowseek::test {

@@ -1,3 +1,8 @@
+/**
+ * @file search.hpp
+ * @brief Declares the public immutable-index search API and result types.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -16,44 +21,31 @@ inline constexpr std::size_t kMaxTopK = 1000;
 
 /** Per-term contribution to a document's total relevance score. */
 struct ScoreDetail {
-        /** Normalized query term. */
-        std::string term;
-        /** Occurrences of the term in this document. */
-        std::uint32_t term_frequency{};
-        /** Visible documents containing the term. */
-        std::uint32_t document_frequency{};
-        /** BM25 contribution added to the hit score. */
-        double score{};
+        std::string term; ///< Normalized query term.
+        std::uint32_t term_frequency{}; ///< Occurrences in this document.
+        std::uint32_t document_frequency{}; ///< Visible containing documents.
+        double score{}; ///< BM25 contribution to the hit score.
 };
 
 /** Source text attached to a search hit when it can be read. */
 struct SourceSnippet {
-        /** One-based source line number. */
-        std::size_t line{};
-        /** Matching source line, truncated to the presentation limit. */
-        std::string text;
+        std::size_t line{}; ///< One-based source line number.
+        std::string text; ///< Matching line truncated for presentation.
 };
 
 /** One ranked document returned by a search. */
 struct SearchHit {
-        /** Source-relative path stored in the index. */
-        std::filesystem::path path;
-        /** Total BM25 score. */
-        double score{};
-        /** Source line, absent when not requested or unavailable. */
-        std::optional<SourceSnippet> snippet;
-        /** Per-term score details, populated only when requested. */
-        std::vector<ScoreDetail> explanation;
+        std::filesystem::path path; ///< Indexed source-relative path.
+        double score{};             ///< Total BM25 relevance score.
+        std::optional<SourceSnippet> snippet; ///< Optional matching source line.
+        std::vector<ScoreDetail> explanation; ///< Optional per-term scoring.
 };
 
 /** Options controlling result count and optional presentation data. */
 struct SearchOptions {
-        /** Maximum returned hits. */
-        std::size_t top_k = 20;
-        /** Corpus root used for snippets; empty disables source reads. */
-        std::filesystem::path source_root;
-        /** Whether each hit includes per-term score details. */
-        bool explain = false;
+        std::size_t top_k = 20; ///< Maximum returned hits, at most kMaxTopK.
+        std::filesystem::path source_root; ///< Empty disables source snippets.
+        bool explain = false; ///< Whether hits include per-term contributions.
 };
 
 /** Searches one immutable index generation loaded from a directory. */
@@ -93,7 +85,7 @@ class Searcher {
 
       private:
         class Impl;
-        std::unique_ptr<Impl> impl_;
+        std::unique_ptr<Impl> impl_; ///< Owned immutable loaded-index state.
 };
 
 } // namespace snowseek

@@ -1,3 +1,9 @@
+/**
+ * @file index_builder_resource_test.cpp
+ * @brief Validates index-builder resource estimates, limits, and profile
+ * behavior.
+ */
+
 #include "index/index_builder.hpp"
 #include "storage/index_file.hpp"
 

@@ -1,3 +1,8 @@
+/**
+ * @file index_builder_internal.hpp
+ * @brief Shares internal parsing, budgeting, and publication primitives.
+ */
+
 #pragma once
 
 #include "index/index_builder.hpp"
@@ -14,8 +19,8 @@
 namespace snowseek::index::builder_detail {
 
 struct FileMetadata {
-        std::uint64_t file_size{};
-        std::int64_t modified_time_ns{};
+        std::uint64_t file_size{}; ///< Exact source length in bytes.
+        std::int64_t modified_time_ns{}; ///< Unix Epoch timestamp in nanoseconds.
 };
 
 class MemoryLimitExceeded : public std::runtime_error {
@@ -53,10 +58,10 @@ class BuildMemoryBudget {
         [[nodiscard]] std::uint64_t peak_bytes() const noexcept;
 
       private:
-        std::uint64_t limit_bytes_{};
-        mutable std::mutex mutex_;
-        std::uint64_t used_bytes_{};
-        std::uint64_t peak_bytes_{};
+        std::uint64_t limit_bytes_{}; ///< Maximum concurrent logical charge.
+        mutable std::mutex mutex_; ///< Protects charge counters across workers.
+        std::uint64_t used_bytes_{}; ///< Current accepted charge in bytes.
+        std::uint64_t peak_bytes_{}; ///< Greatest accepted charge in bytes.
 };
 
 class MemoryReservation {
@@ -105,8 +110,8 @@ class MemoryReservation {
         [[nodiscard]] std::uint64_t bytes() const noexcept;
 
       private:
-        BuildMemoryBudget *budget_{};
-        std::uint64_t bytes_{};
+        BuildMemoryBudget *budget_{}; ///< Non-owning charged budget, if bound.
+        std::uint64_t bytes_{}; ///< Charge currently owned by this reservation.
 };
 
 class BuildWorkspace {
@@ -177,20 +182,20 @@ class BuildWorkspace {
         [[nodiscard]] std::uint64_t peak_bytes() const noexcept;
 
       private:
-        std::filesystem::path path_;
-        std::uint64_t budget_bytes_{};
-        std::uint64_t used_bytes_{};
-        std::uint64_t peak_bytes_{};
+        std::filesystem::path path_; ///< Private directory removed on destruction.
+        std::uint64_t budget_bytes_{}; ///< Maximum retained and transient bytes.
+        std::uint64_t used_bytes_{}; ///< Bytes retained by completed files.
+        std::uint64_t peak_bytes_{}; ///< Peak retained-plus-transient bytes.
 };
 
 struct ParsedDocument {
-        FileMetadata metadata;
-        std::uint32_t content_crc32c{};
-        document::TextReadStats read_stats;
-        std::vector<analysis::Token> tokens;
-        std::uint64_t token_term_bytes{};
-        BuildMemoryStats memory_stats;
-        MemoryReservation memory_reservation;
+        FileMetadata metadata; ///< Metadata stable across the source read.
+        std::uint32_t content_crc32c{}; ///< CRC32C of raw source bytes.
+        document::TextReadStats read_stats; ///< Reader measurements for the file.
+        std::vector<analysis::Token> tokens; ///< Tokens in source order.
+        std::uint64_t token_term_bytes{}; ///< Dynamic token text bytes.
+        BuildMemoryStats memory_stats; ///< Transient parse-memory observations.
+        MemoryReservation memory_reservation; ///< Charge held until commit.
 };
 
 /**

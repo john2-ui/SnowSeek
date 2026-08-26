@@ -1,3 +1,8 @@
+/**
+ * @file text_reader.hpp
+ * @brief Declares streaming UTF-8 text-reading policies and statistics.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -15,14 +20,14 @@ enum class InvalidUtf8Policy {
 };
 
 struct TextReadOptions {
-        std::size_t chunk_size = 64U * 1024U;
-        InvalidUtf8Policy invalid_utf8_policy = InvalidUtf8Policy::replace;
+        std::size_t chunk_size = 64U * 1024U; ///< Source bytes read per chunk.
+        InvalidUtf8Policy invalid_utf8_policy = InvalidUtf8Policy::replace; ///< Invalid-sequence behavior.
 };
 
 struct TextReadStats {
-        std::uint64_t bytes_read{};
-        std::uint64_t bytes_emitted{};
-        std::uint64_t invalid_sequence_count{};
+        std::uint64_t bytes_read{}; ///< Exact source bytes consumed.
+        std::uint64_t bytes_emitted{}; ///< Validated or replacement UTF-8 bytes.
+        std::uint64_t invalid_sequence_count{}; ///< Replaced invalid sequences.
 };
 
 class InvalidUtf8Error final : public std::runtime_error {
@@ -41,8 +46,8 @@ class InvalidUtf8Error final : public std::runtime_error {
         [[nodiscard]] std::uint64_t byte_offset() const noexcept;
 
       private:
-        std::filesystem::path path_;
-        std::uint64_t byte_offset_{};
+        std::filesystem::path path_; ///< Source containing the invalid bytes.
+        std::uint64_t byte_offset_{}; ///< Zero-based source byte offset.
 };
 
 // The supplied string_view remains valid only for the duration of the call.
@@ -77,7 +82,7 @@ class TextReader {
              const SourceChunkConsumer &source_consumer = {}) const;
 
       private:
-        TextReadOptions options_;
+        TextReadOptions options_; ///< Read and decoding policy for every call.
 };
 
 } // namespace snowseek::document

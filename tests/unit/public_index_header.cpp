@@ -1,3 +1,8 @@
+/**
+ * @file public_index_header.cpp
+ * @brief Checks that the public indexing header is self-contained and usable.
+ */
+
 #include "snowseek/index.hpp"
 
 #include <type_traits>

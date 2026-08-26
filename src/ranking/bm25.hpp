@@ -1,3 +1,8 @@
+/**
+ * @file bm25.hpp
+ * @brief Declares the BM25 term-scoring interface.
+ */
+
 #pragma once
 
 #include <cstdint>

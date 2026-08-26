@@ -1,3 +1,8 @@
+/**
+ * @file version.hpp
+ * @brief Exposes the SnowSeek public API semantic version.
+ */
+
 #pragma once
 
 #include <string_view>

@@ -1,3 +1,8 @@
+/**
+ * @file index_file.hpp
+ * @brief Declares Segment serialization, validation, and directory loading APIs.
+ */
+
 #pragma once
 
 #include "document/document_store.hpp"
@@ -13,54 +18,39 @@ inline constexpr const char *kSegmentFileName =
 
 /** @brief Physical record totals for exactly one immutable Segment v2 file. */
 struct SegmentStats {
-        /** Exact serialized Segment byte size. */
-        std::uint64_t file_size{};
-        /** All Document records, including live records and Tombstones. */
-        std::uint64_t physical_document_count{};
-        /** Live Document records physically present in this Segment. */
-        std::uint64_t live_document_count{};
-        /** Tombstone records physically present in this Segment. */
-        std::uint64_t tombstone_count{};
-        /** Term records physically present in this Segment. */
-        std::uint64_t term_count{};
-        /** Posting records physically present in this Segment. */
-        std::uint64_t posting_count{};
-        /** Position records physically present in this Segment. */
-        std::uint64_t position_count{};
+        std::uint64_t file_size{}; ///< Exact serialized size in bytes.
+        std::uint64_t physical_document_count{}; ///< All live and Tombstone records.
+        std::uint64_t live_document_count{}; ///< Live records physically present.
+        std::uint64_t tombstone_count{}; ///< Tombstone records physically present.
+        std::uint64_t term_count{}; ///< Term records physically present.
+        std::uint64_t posting_count{}; ///< Posting records physically present.
+        std::uint64_t position_count{}; ///< Position records physically present.
 };
 
 /** @brief Resolved logical totals and retained physical costs for a directory. */
 struct IndexStats {
-        /** Sum of the active Segment byte sizes. */
-        std::uint64_t file_size{};
-        /** Live documents visible after newest-path resolution. */
-        std::uint64_t live_document_count{};
-        /** Tombstone records retained across all active Segments. */
-        std::uint64_t tombstone_count{};
-        /** All Document records retained across all active Segments. */
-        std::uint64_t physical_document_count{};
-        /** Number of active physical Segments. */
-        std::uint64_t segment_count{};
-        /** Terms remaining in the resolved logical index. */
-        std::uint64_t term_count{};
-        /** Postings remaining after newest-path filtering. */
-        std::uint64_t posting_count{};
-        /** Positions belonging to retained logical Postings. */
-        std::uint64_t position_count{};
+        std::uint64_t file_size{}; ///< Sum of active Segment sizes in bytes.
+        std::uint64_t live_document_count{}; ///< Documents visible after path resolution.
+        std::uint64_t tombstone_count{}; ///< Tombstones retained in active Segments.
+        std::uint64_t physical_document_count{}; ///< All retained Document records.
+        std::uint64_t segment_count{}; ///< Number of active physical Segments.
+        std::uint64_t term_count{}; ///< Terms in the resolved logical index.
+        std::uint64_t posting_count{}; ///< Postings retained after path filtering.
+        std::uint64_t position_count{}; ///< Positions belonging to retained Postings.
 };
 
-/** @brief Fully decoded documents, postings, and statistics for one Segment. */
+/** @brief Documents, postings, and available statistics for one Segment. */
 struct LoadedSegment {
-        document::DocumentStore documents;
-        index::InMemoryIndex index;
-        SegmentStats stats;
+        document::DocumentStore documents; ///< Physical or candidate local records.
+        index::InMemoryIndex index; ///< Postings keyed by local document ID.
+        SegmentStats stats; ///< Physical totals populated as they become known.
 };
 
 /** @brief Visible logical index resolved from one or more active Segments. */
 struct LoadedIndex {
-        document::DocumentStore documents;
-        index::InMemoryIndex index;
-        IndexStats stats;
+        document::DocumentStore documents; ///< Visible live documents in global ID order.
+        index::InMemoryIndex index; ///< Postings remapped to visible document IDs.
+        IndexStats stats; ///< Resolved logical and retained physical totals.
 };
 
 /**

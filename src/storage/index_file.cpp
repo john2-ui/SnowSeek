@@ -1,3 +1,8 @@
+/**
+ * @file index_file.cpp
+ * @brief Serializes in-memory documents and postings into immutable Segments.
+ */
+
 #include "storage/index_file.hpp"
 
 #include "common/checked_arithmetic.hpp"

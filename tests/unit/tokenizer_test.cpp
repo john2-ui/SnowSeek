@@ -1,3 +1,9 @@
+/**
+ * @file tokenizer_test.cpp
+ * @brief Verifies token normalization, positions, streaming, and input
+ * validation.
+ */
+
 #include "analysis/tokenizer.hpp"
 
 #include "test_support.hpp"

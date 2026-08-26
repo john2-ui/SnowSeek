@@ -1,3 +1,8 @@
+/**
+ * @file document_store.cpp
+ * @brief Implements contiguous storage and accounting for document metadata.
+ */
+
 #include "document/document_store.hpp"
 
 #include "common/checked_arithmetic.hpp"

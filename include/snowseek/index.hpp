@@ -1,3 +1,8 @@
+/**
+ * @file index.hpp
+ * @brief Declares the public persistent-index maintenance API.
+ */
+
 #pragma once
 
 #include <cstddef>
@@ -54,8 +59,8 @@ class PathPatternSpan {
         [[nodiscard]] bool empty() const noexcept { return size_ == 0; }
 
       private:
-        const std::string *data_{};
-        std::size_t size_{};
+        const std::string *data_{}; ///< Borrowed first pattern when nonempty.
+        std::size_t size_{};        ///< Number of borrowed patterns.
 };
 #endif
 
@@ -68,16 +73,15 @@ enum class ResourceProfile {
 
 /** @brief Configures an index writer with optional profile overrides. */
 struct IndexOptions {
-        /** Base resource policy applied before explicit overrides. */
-        ResourceProfile profile{ResourceProfile::balanced};
-        /** Maximum classified build memory, or the profile default. */
-        std::optional<std::uint64_t> memory_limit_bytes;
-        /** Maximum retained and transient workspace bytes, or no override. */
-        std::optional<std::uint64_t> temporary_space_limit_bytes;
-        /** Concurrent document parsers, or the profile default. */
-        std::optional<std::size_t> worker_threads;
-        /** Maximum Segment inputs per merge, or the profile default. */
-        std::optional<std::size_t> merge_fan_in;
+        ResourceProfile profile{ResourceProfile::balanced}; ///< Base policy.
+        std::optional<std::uint64_t>
+                memory_limit_bytes; ///< Byte cap; absent uses profile default.
+        std::optional<std::uint64_t>
+                temporary_space_limit_bytes; ///< Optional workspace byte cap.
+        std::optional<std::size_t>
+                worker_threads; ///< Parsers; absent uses profile default.
+        std::optional<std::size_t>
+                merge_fan_in; ///< Merge width; absent uses profile default.
 };
 
 /** @brief Describes whether an index operation changed the visible revision. */
@@ -97,88 +101,55 @@ enum class DiagnosticStage {
 
 /** @brief Reports one recoverable index-maintenance problem. */
 struct Diagnostic {
-        /** Operation stage that recovered from the problem. */
-        DiagnosticStage stage{};
-        /** Related source or index path, when one exists. */
-        std::filesystem::path path;
-        /** Human-readable problem description. */
-        std::string message;
+        DiagnosticStage stage{};   ///< Stage that recovered from the problem.
+        std::filesystem::path path; ///< Related path, when one exists.
+        std::string message;        ///< Human-readable problem description.
 };
 
 /** @brief Counts logical path changes made or inspected by one operation. */
 struct ChangeCounts {
-        /** Newly visible source paths. */
-        std::uint64_t added{};
-        /** Existing paths replaced by newer content. */
-        std::uint64_t modified{};
-        /** Paths hidden because they disappeared from the source tree. */
-        std::uint64_t removed{};
-        /** Scanned paths whose fingerprints did not change. */
-        std::uint64_t unchanged{};
-        /** Live paths selected by an explicit remove operation. */
-        std::uint64_t matched{};
-        /** Physical records removed by compaction. */
-        std::uint64_t discarded_records{};
+        std::uint64_t added{};    ///< Newly visible source paths.
+        std::uint64_t modified{}; ///< Paths replaced by newer content.
+        std::uint64_t removed{}; ///< Paths hidden by update or explicit removal.
+        std::uint64_t unchanged{}; ///< Paths with unchanged fingerprints.
+        std::uint64_t matched{};  ///< Live paths selected by remove.
+        std::uint64_t discarded_records{}; ///< Records removed by compaction.
 };
 
 /** @brief Reports the externally useful resource and indexing measurements. */
 struct BuildMetrics {
-        /** Candidate files discovered by the scanner. */
-        std::uint64_t scanned_files{};
-        /** Documents committed successfully. */
-        std::uint64_t indexed_files{};
-        /** Documents skipped after recoverable failures. */
-        std::uint64_t failed_files{};
-        /** Source bytes read for committed documents. */
-        std::uint64_t indexed_bytes{};
-        /** Normalized tokens committed to the index. */
-        std::uint64_t token_count{};
-        /** Peak classified logical-memory charge. */
-        std::uint64_t peak_memory_bytes{};
-        /** Peak retained-plus-transient workspace bytes. */
-        std::uint64_t peak_temporary_bytes{};
-        /** Temporary Segments emitted before the published candidate. */
-        std::uint64_t temporary_segments{};
-        /** Merge levels used to produce the candidate. */
-        std::uint64_t merge_passes{};
-        /** Parser concurrency selected for the operation. */
-        std::size_t worker_threads{};
-        /** Whether the published Segment stores token positions. */
-        bool positions_enabled{};
+        std::uint64_t scanned_files{}; ///< Candidate files discovered.
+        std::uint64_t indexed_files{}; ///< Documents committed successfully.
+        std::uint64_t failed_files{}; ///< Documents skipped after failures.
+        std::uint64_t indexed_bytes{}; ///< Source bytes committed.
+        std::uint64_t token_count{};   ///< Normalized tokens committed.
+        std::uint64_t peak_memory_bytes{}; ///< Peak logical-memory charge.
+        std::uint64_t peak_temporary_bytes{}; ///< Peak workspace bytes.
+        std::uint64_t temporary_segments{}; ///< Pre-publication Segments.
+        std::uint64_t merge_passes{}; ///< Merge levels used.
+        std::size_t worker_threads{}; ///< Selected parser concurrency.
+        bool positions_enabled{}; ///< Whether Segments retain positions.
 };
 
 /** @brief Summarizes one rebuild or maintenance operation. */
 struct IndexResult {
-        /** Whether the visible revision changed and why. */
-        IndexOutcome outcome{IndexOutcome::unchanged};
-        /** Visible Manifest generation after the operation. */
-        std::uint64_t revision{};
-        /** Number of Segments selected by that generation. */
-        std::uint64_t active_segments{};
-        /** Logical source-path and compaction counts. */
-        ChangeCounts changes;
-        /** Concise work and resource measurements. */
-        BuildMetrics metrics;
-        /** Recoverable problems in deterministic stage order. */
-        std::vector<Diagnostic> diagnostics;
+        IndexOutcome outcome{IndexOutcome::unchanged}; ///< Revision effect.
+        std::uint64_t revision{}; ///< Visible Manifest generation afterward.
+        std::uint64_t active_segments{}; ///< Segments selected by the revision.
+        ChangeCounts changes; ///< Logical path and compaction counts.
+        BuildMetrics metrics; ///< Work and resource measurements.
+        std::vector<Diagnostic> diagnostics; ///< Ordered recoverable problems.
 };
 
 /** @brief Reports validated logical and physical index totals. */
 struct IndexStats {
-        /** Sum of active physical Segment file sizes. */
-        std::uint64_t bytes{};
-        /** Visible live documents after path resolution. */
-        std::uint64_t documents{};
-        /** Active physical Segment count. */
-        std::uint64_t segments{};
-        /** Physical Tombstone records retained in active Segments. */
-        std::uint64_t tombstones{};
-        /** Terms remaining in the visible logical index. */
-        std::uint64_t terms{};
-        /** Postings remaining after visibility filtering. */
-        std::uint64_t postings{};
-        /** Positions belonging to retained Postings. */
-        std::uint64_t positions{};
+        std::uint64_t bytes{}; ///< Total active Segment bytes.
+        std::uint64_t documents{}; ///< Visible live documents.
+        std::uint64_t segments{}; ///< Active physical Segments.
+        std::uint64_t tombstones{}; ///< Retained Tombstone records.
+        std::uint64_t terms{}; ///< Visible logical terms.
+        std::uint64_t postings{}; ///< Visible logical Postings.
+        std::uint64_t positions{}; ///< Positions in retained Postings.
 };
 
 /**
@@ -229,8 +200,8 @@ class IndexWriter {
         [[nodiscard]] IndexResult compact();
 
       private:
-        std::filesystem::path index_directory_;
-        IndexOptions options_;
+        std::filesystem::path index_directory_; ///< Managed index directory.
+        IndexOptions options_; ///< Resource policy for maintenance calls.
 };
 
 /**

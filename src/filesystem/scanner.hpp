@@ -1,3 +1,8 @@
+/**
+ * @file scanner.hpp
+ * @brief Declares recursive source-file scanning options and results.
+ */
+
 #pragma once
 
 #include <cstdint>
@@ -9,20 +14,20 @@
 namespace snowseek::filesystem {
 
 struct ScanOptions {
-        std::uintmax_t max_file_size = 16U * 1024U * 1024U; // 16 MB
-        bool follow_symlinks = false;
-        std::vector<std::string> include_patterns;
-        std::vector<std::string> exclude_patterns;
+        std::uintmax_t max_file_size = 16U * 1024U * 1024U; ///< Largest accepted file size in bytes.
+        bool follow_symlinks = false; ///< Whether traversal follows links.
+        std::vector<std::string> include_patterns; ///< Admission Glob patterns.
+        std::vector<std::string> exclude_patterns; ///< Rejection Glob patterns.
 };
 
 struct ScanError {
-        std::filesystem::path path;
-        std::error_code error;
+        std::filesystem::path path; ///< Entry that could not be inspected.
+        std::error_code error;      ///< Recoverable filesystem failure.
 };
 
 struct ScanResult {
-        std::vector<std::filesystem::path> files;
-        std::vector<ScanError> errors;
+        std::vector<std::filesystem::path> files; ///< Sorted eligible files.
+        std::vector<ScanError> errors; ///< Sorted recoverable failures.
 };
 
 class Scanner {
@@ -41,7 +46,7 @@ class Scanner {
         [[nodiscard]] ScanResult scan(const std::filesystem::path &root) const;
 
       private:
-        ScanOptions options_;
+        ScanOptions options_; ///< Rules applied by every scan call.
 };
 
 } // namespace snowseek::filesystem

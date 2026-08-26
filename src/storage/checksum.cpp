@@ -1,3 +1,8 @@
+/**
+ * @file checksum.cpp
+ * @brief Implements portable table-driven CRC32C checksums.
+ */
+
 #include "storage/checksum.hpp"
 
 #include <array>

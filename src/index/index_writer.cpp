@@ -1,3 +1,8 @@
+/**
+ * @file index_writer.cpp
+ * @brief Adapts the public index writer to internal persistence workflows.
+ */
+
 #include "snowseek/index.hpp"
 
 #include "index/index_builder.hpp"

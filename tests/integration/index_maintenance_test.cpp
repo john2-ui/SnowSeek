@@ -1,3 +1,8 @@
+/**
+ * @file index_maintenance_test.cpp
+ * @brief Exercises incremental index updates, removals, and compaction.
+ */
+
 #include "index/index_builder.hpp"
 #include "storage/index_file.hpp"
 #include "storage/index_manifest.hpp"

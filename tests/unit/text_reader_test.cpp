@@ -1,3 +1,8 @@
+/**
+ * @file text_reader_test.cpp
+ * @brief Verifies bounded text streaming, validation, and read statistics.
+ */
+
 #include "document/text_reader.hpp"
 
 #include "test_support.hpp"
@@ -49,7 +54,7 @@ class TemporaryDirectory {
         }
 
       private:
-        std::filesystem::path path_;
+        std::filesystem::path path_; ///< Reader fixture root.
 };
 
 /**

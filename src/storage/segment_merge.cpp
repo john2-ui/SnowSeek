@@ -1,3 +1,8 @@
+/**
+ * @file segment_merge.cpp
+ * @brief Merges ordered immutable Segments with bounded working storage.
+ */
+
 #include "storage/segment_merge.hpp"
 
 #include "common/checked_arithmetic.hpp"
@@ -222,18 +227,18 @@ class TermCursor {
         }
 
       private:
-        IndexHeader header_;
-        std::ifstream term_records_;
-        std::ifstream term_bytes_;
-        std::ifstream postings_;
-        std::ifstream positions_;
-        std::uint64_t document_base_{};
-        std::uint64_t term_count_{};
-        std::uint64_t term_index_{};
-        bool valid_{};
-        TermRecord record_;
-        std::string term_;
-        bool has_positions_{};
+        IndexHeader header_; ///< Validated layout for the source Segment.
+        std::ifstream term_records_; ///< Cursor over fixed-width Term records.
+        std::ifstream term_bytes_; ///< Random-access stream for normalized terms.
+        std::ifstream postings_; ///< Random-access stream for Posting records.
+        std::ifstream positions_; ///< Random-access stream for Position values.
+        std::uint64_t document_base_{}; ///< Global ID added to local document IDs.
+        std::uint64_t term_count_{}; ///< Declared number of source terms.
+        std::uint64_t term_index_{}; ///< Number of Term records consumed.
+        bool valid_{}; ///< Whether record_ and term_ name a current term.
+        TermRecord record_; ///< Current decoded Term record.
+        std::string term_; ///< Current normalized term bytes.
+        bool has_positions_{}; ///< Whether the source stores Position data.
 };
 
 /**

@@ -1,3 +1,8 @@
+/**
+ * @file segment_format_internal.hpp
+ * @brief Defines fixed-width Segment records and their stream codecs.
+ */
+
 #pragma once
 
 #include "storage/binary_codec.hpp"
@@ -20,29 +25,29 @@ inline constexpr std::uint32_t kSupportedDocumentFlags =
         kDocumentTombstone | kDocumentContentCrc32c;
 
 struct DocumentRecord {
-        std::uint32_t document_id{};
-        std::uint32_t path_length{};
-        std::uint64_t path_offset{};
-        std::uint64_t file_size{};
-        std::uint64_t modified_time_bits{};
-        std::uint32_t token_count{};
-        std::uint32_t flags{};
-        std::uint32_t content_crc32c{};
-        std::uint32_t reserved{};
+        std::uint32_t document_id{}; ///< Contiguous Segment-local identifier.
+        std::uint32_t path_length{}; ///< UTF-8 path length in bytes.
+        std::uint64_t path_offset{}; ///< Byte offset within the Paths section.
+        std::uint64_t file_size{}; ///< Source file size in bytes; zero for Tombstones.
+        std::uint64_t modified_time_bits{}; ///< Signed epoch nanoseconds as raw bits.
+        std::uint32_t token_count{}; ///< Indexed token occurrences in the document.
+        std::uint32_t flags{}; ///< Valid combination of kDocument* flags.
+        std::uint32_t content_crc32c{}; ///< Content CRC32C when its flag is set.
+        std::uint32_t reserved{}; ///< Must be zero in Segment v2.
 };
 
 struct TermRecord {
-        std::uint64_t term_offset{};
-        std::uint32_t term_length{};
-        std::uint32_t document_frequency{};
-        std::uint64_t posting_offset{};
-        std::uint64_t posting_length{};
+        std::uint64_t term_offset{}; ///< Byte offset from the Terms section start.
+        std::uint32_t term_length{}; ///< Normalized UTF-8 term length in bytes.
+        std::uint32_t document_frequency{}; ///< Number of associated Posting records.
+        std::uint64_t posting_offset{}; ///< Byte offset within the Postings section.
+        std::uint64_t posting_length{}; ///< Serialized Posting span in bytes.
 };
 
 struct PostingRecord {
-        std::uint32_t document_id{};
-        std::uint32_t frequency{};
-        std::uint64_t position_offset{};
+        std::uint32_t document_id{}; ///< Segment-local document identifier.
+        std::uint32_t frequency{}; ///< Term occurrences in the document.
+        std::uint64_t position_offset{}; ///< Byte offset within the Positions section.
 };
 
 /**

@@ -1,3 +1,8 @@
+/**
+ * @file index_builder.cpp
+ * @brief Resolves index-build policies and dispatches builder operations.
+ */
+
 #include "index/index_builder.hpp"
 
 #include <algorithm>

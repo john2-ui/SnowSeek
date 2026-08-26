@@ -1,3 +1,8 @@
+/**
+ * @file index_validation.cpp
+ * @brief Validates Segment contents and materializes trusted index data.
+ */
+
 #include "storage/index_file.hpp"
 
 #include "common/checked_arithmetic.hpp"

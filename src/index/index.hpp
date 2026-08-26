@@ -1,3 +1,8 @@
+/**
+ * @file index.hpp
+ * @brief Defines the in-memory inverted index and posting data model.
+ */
+
 #pragma once
 
 #include "document/document.hpp"
@@ -14,9 +19,9 @@ namespace snowseek::index {
 using Position = std::uint32_t;
 
 struct Posting {
-        document::DocumentId document_id{};
-        std::uint32_t frequency{};
-        std::vector<Position> positions;
+        document::DocumentId document_id{}; ///< Owning document identifier.
+        std::uint32_t frequency{}; ///< Total occurrences in the document.
+        std::vector<Position> positions; ///< Ordered zero-based token ordinals.
 
         /**
          * @brief Reports how often the term occurs in this document.
@@ -28,8 +33,8 @@ struct Posting {
 using PostingList = std::vector<Posting>;
 
 struct InMemoryIndexMemoryUsage {
-        std::uint64_t dictionary_bytes{};
-        std::uint64_t posting_bytes{};
+        std::uint64_t dictionary_bytes{}; ///< Estimated term-map bytes.
+        std::uint64_t posting_bytes{}; ///< Estimated posting-list bytes.
 };
 
 class InMemoryIndex {
@@ -122,9 +127,9 @@ class InMemoryIndex {
          */
         void append_posting(PostingList &postings, Posting posting);
 
-        std::unordered_map<std::string, PostingList> dictionary_;
-        InMemoryIndexMemoryUsage memory_usage_;
-        bool store_positions_{true};
+        std::unordered_map<std::string, PostingList> dictionary_; ///< Owned term postings.
+        InMemoryIndexMemoryUsage memory_usage_; ///< Capacity-based byte estimates.
+        bool store_positions_{true}; ///< Whether new postings retain token positions.
 };
 
 } // namespace snowseek::index

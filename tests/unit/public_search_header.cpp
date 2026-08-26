@@ -1,3 +1,8 @@
+/**
+ * @file public_search_header.cpp
+ * @brief Checks that the public search header is self-contained and usable.
+ */
+
 #include "snowseek/search.hpp"
 
 #include <type_traits>

@@ -1,3 +1,8 @@
+/**
+ * @file search.cpp
+ * @brief Loads, evaluates, ranks, and presents persisted-index searches.
+ */
+
 #include "snowseek/search.hpp"
 
 #include "query/query_evaluator.hpp"
@@ -23,9 +28,9 @@ namespace snowseek {
 namespace {
 
 struct RankedDocument {
-        document::DocumentId document_id{};
-        double score{};
-        std::string path_key;
+        document::DocumentId document_id{}; ///< Candidate document identifier.
+        double score{}; ///< BM25 relevance score.
+        std::string path_key; ///< Deterministic tie-break key.
 };
 
 struct SnippetReady final {};
@@ -392,7 +397,7 @@ class Searcher::Impl {
         explicit Impl(const std::filesystem::path &index_directory)
             : loaded(storage::read_index_directory(index_directory)) {}
 
-        storage::LoadedIndex loaded;
+        storage::LoadedIndex loaded; ///< Stable index generation used by searches.
 };
 
 Searcher::Searcher(const std::filesystem::path &index_directory)

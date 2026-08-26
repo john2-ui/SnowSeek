@@ -1,3 +1,8 @@
+/**
+ * @file application.hpp
+ * @brief Declares the SnowSeek command-line application entry point.
+ */
+
 #pragma once
 
 namespace snowseek::cli {
