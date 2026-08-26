@@ -1,12 +1,12 @@
-# SnowSeek Index Format v1
+# SnowSeek Segment Format v2
 
 ## 1. Scope
 
-Version 1 stores one immutable Segment selected by the directory's
-[`MANIFEST`](manifest-format.md). Segment filenames derive from monotonic IDs,
-for example `<index-directory>/segment-0000000000000001.idx`. Manifest-free M4
-directories use that exact filename as a legacy fallback. The directory layer
-does not change the Segment bytes defined here. The
+Version 2 stores one immutable Segment in the ordered active set selected by
+the directory's [`MANIFEST`](manifest-format.md). Segment filenames derive from
+monotonic IDs, for example
+`<index-directory>/segment-0000000000000001.idx`. The directory layer does not
+change the Segment bytes defined here. The
 format contains no native C++ object representations: every integer has an
 explicit width and is encoded in little-endian byte order.
 
@@ -19,10 +19,10 @@ failure. CRC32C detects accidental corruption and is not a security hash.
 The header is exactly 200 bytes. Header CRC32C covers bytes `[0, 192)`; the
 checksum field and final reserved field are outside that range.
 
-| Offset | Size | Field | v1 value |
+| Offset | Size | Field | Value |
 |---:|---:|---|---|
 | 0 | 8 | Magic | ASCII `SNOWSEEK` |
-| 8 | 4 | Format version | `1` |
+| 8 | 4 | Format version | `2` |
 | 12 | 4 | Feature flags | Supported bits only |
 | 16 | 4 | Header size | `200` |
 | 20 | 4 | Section count | `5` |
@@ -32,7 +32,7 @@ checksum field and final reserved field are outside that range.
 | 196 | 4 | Reserved | `0` |
 
 Feature bit `0x00000001` indicates that the Positions section is present.
-Every other bit is unsupported in v1. When the bit is clear, the Positions
+Every other bit is unsupported. When the bit is clear, the Positions
 section must be empty and every Posting position offset must be zero.
 
 ### 2.1 Section descriptor
@@ -70,7 +70,7 @@ or addition.
 
 ### 3.1 Documents
 
-The section begins with a `u64` document count, followed by that many 40-byte
+The section begins with a `u64` document count, followed by that many 48-byte
 records in ascending, contiguous DocumentId order.
 
 | Relative offset | Size | Field |
@@ -81,17 +81,27 @@ records in ascending, contiguous DocumentId order.
 | 16 | 8 | Source file size |
 | 24 | 8 | Signed modification time in Unix Epoch nanoseconds |
 | 32 | 4 | Indexed token count |
-| 36 | 4 | Reserved, always `0` |
+| 36 | 4 | Document flags |
+| 40 | 4 | Raw source CRC32C |
+| 44 | 4 | Reserved, always `0` |
 
 The signed timestamp uses its 64-bit two's-complement bit representation in
 little-endian order.
+
+Document flag bit `0x00000001` marks a Tombstone and bit `0x00000002` marks
+the content CRC32C as valid. Other bits are rejected. A live record may carry
+the CRC used by incremental change detection. A Tombstone stores only its
+relative path: file size, mtime, token count, CRC, and CRC-valid bit must all be
+zero, and no Posting may reference it. CRC32C is a non-adversarial change
+fingerprint, not a cryptographic hash.
 
 ### 3.2 Paths
 
 Paths are source-root-relative generic UTF-8 bytes concatenated without a
 terminator. Document records delimit them with offset and length. Writers reject
 paths that cannot be represented as nonempty valid UTF-8; `/` is the portable
-separator stored by `generic_u8string()`.
+separator stored by `generic_u8string()`. Absolute paths and `.` or `..` path
+components are invalid, so a stored path cannot escape its source root.
 
 ### 3.3 Terms
 
@@ -107,7 +117,7 @@ then the concatenated term bytes referenced by those records.
 | 24 | 8 | Posting byte length |
 
 Term records are strictly sorted by normalized term bytes. Terms are nonempty
-ASCII bytes in v1. Each posting length equals document frequency multiplied by
+ASCII bytes. Each posting length equals document frequency multiplied by
 16.
 
 ### 3.4 Postings
@@ -138,10 +148,22 @@ CRC32C uses the reflected Castagnoli polynomial `0x82F63B78`, an initial state
 of `0xFFFFFFFF`, and a final XOR of `0xFFFFFFFF`. The check value for ASCII
 `123456789` is `0xE3069283`.
 
-## 5. Compatibility
+## 5. Multi-Segment visibility
 
-A v1 reader accepts only format version 1 and known feature bits. It must not
-guess how to read a newer version. Logical records use fixed-width identifiers,
+The Manifest orders active SegmentIds increasingly. For each relative path,
+the last record in `(Manifest Segment order, local DocumentId order)` is
+visible. A last live record replaces an older version; a last Tombstone removes
+the path. Directory loading validates all Segments first, assigns contiguous
+global IDs only to visible live records, and remaps retained Postings. BM25 uses
+this global live population and the filtered document frequency. All active
+Segments must agree on the Positions feature.
+
+## 6. Compatibility
+
+A 0.2 reader accepts exactly Segment v2 with known feature bits; Segment v1 is
+rejected with an instruction to rebuild the index. A 0.2 writer emits the same
+v2 byte contract documented here, so existing Segment v2 + Manifest v1 indexes
+remain byte-compatible. Logical records use fixed-width identifiers,
 explicit byte order, and no host padding so a Segment produced on x86_64 Linux
 can be consumed on AArch64 Linux. Readers retain term frequency when the
 Positions feature is absent; term, Boolean, filtering, and BM25 operations stay

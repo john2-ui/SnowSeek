@@ -6,28 +6,31 @@
 具备明确输入、可运行产物、自动化测试和退出条件；性能结论只记录实测数据。
 
 预计完整 MVP 为 M1～M5。M6、M7 属于增强阶段，不阻塞首次发布。
-当前实现已完成 M3、M4 的有界并行构建，以及 M5 首个可靠发布切片：版本化
-Manifest、单调 SegmentId、writer 锁、持久化原子提交与启动恢复。下一步进入多
-Segment 装载和 `update`；自定义临时目录与 AArch64 实测继续暂缓。
+当前实现已完成 M3、M4 的有界并行构建和 M5：Segment v2、多 Segment 装载、
+`update`、Tombstone、Glob 删除、显式/自动压缩，以及 writer 锁、持久化原子提交与
+启动恢复。0.2.0 进一步将公开 C++ 边界收敛为 `index.hpp`、`search.hpp` 和
+`version.hpp`，并停止读取 Segment v1/无 Manifest 索引。自定义临时目录与 AArch64
+实测继续暂缓。
 
 ## 2. 阶段总览
 
-| 阶段 | 目标 | 主要交付物 | 建议版本 |
+| 阶段 | 目标 | 主要交付物 | 当前状态 |
 |---|---|---|---|
-| M0 | 工程基线 | CMake、模块骨架、CI、本机与交叉编译 | `0.1.0` |
-| M1 | 内存检索闭环 | 扫描、Token 化、内存倒排索引、单词/AND 查询 | `0.2.0` |
-| M2 | 持久化索引 | 版本化格式、词典、文档表、Posting、校验 | `0.3.0` |
-| M3 | 完整查询能力 | 布尔/短语查询、过滤、BM25、Top-K、片段 | `0.4.0` |
-| M4 | 有界内存构建 | 临时 Segment、K 路归并、资源档位、ARM64 | `0.5.0` |
-| M5 | 增量与可靠性 | Manifest、Tombstone、Compaction、原子提交 | `1.0.0` |
-| M6 | 性能工程 | 压缩、Skip、查询规划、mmap/pread、Benchmark | `1.1.0` |
-| M7 | 代码结构搜索 | C/C++ 轻量 Lexer、symbol/comment 字段 | `1.2.0` |
+| M0 | 工程基线 | CMake、模块骨架、CI、本机与交叉编译 | 已完成 |
+| M1 | 内存检索闭环 | 扫描、Token 化、内存倒排索引、单词/AND 查询 | 已完成 |
+| M2 | 持久化索引 | 版本化格式、词典、文档表、Posting、校验 | 已完成 |
+| M3 | 完整查询能力 | 布尔/短语查询、过滤、BM25、Top-K、片段 | 已完成 |
+| M4 | 有界内存构建 | 临时 Segment、K 路归并、资源档位、ARM64 | 核心完成，设备实测待补 |
+| M5 | 增量与可靠性 | Manifest、Tombstone、Compaction、原子提交 | `0.2.0` 已完成 |
+| M6 | 性能工程 | 压缩、Skip、查询规划、mmap/pread、Benchmark | 规划中 |
+| M7 | 代码结构搜索 | C/C++ 轻量 Lexer、symbol/comment 字段 | 规划中 |
 
 ## 3. M0：工程基线
 
 ### 工作项
 
-- 固定公开头文件与内部实现边界；
+- 已将公开头文件固定为 `snowseek/index.hpp`、`snowseek/search.hpp` 和
+  `snowseek/version.hpp`，AST、内存索引与存储协议保持私有；
 - 配置 GCC/Clang 的警告选项和 Release/Debug 构建；
 - 建立无第三方依赖的测试程序与 CTest 入口；
 - 验证 x86_64 构建，准备 AArch64、ARMv7 Toolchain；
@@ -119,15 +122,14 @@ Segment 装载和 `update`；自定义临时目录与 AArch64 实测继续暂缓
 
 ### 工作项
 
-- 已定义单 Segment Manifest v1 和单调递增 SegmentId；
-- 按路径、大小、修改时间及可选哈希识别变化；
-- 使用 Tombstone 表示删除和旧版本失效；
-- 实现 `update`、`remove`、`compact`；
+- 已定义多 Segment Manifest v1、Segment v2 和单调递增 SegmentId；
+- 已按路径、大小、纳秒修改时间及原始内容 CRC32C 识别变化；
+- 已使用 Tombstone 表示删除和旧版本失效；
+- 已实现 `update`、`remove`、`compact` 及 16 Segment 软阈值自动压缩；
 - 已使用目录锁、临时文件、`fsync`、目录同步和原子 `rename` 完成可靠全量提交；
 - 已在 writer 启动时识别并清理未提交工作区、Manifest 临时文件和孤儿 Segment；
 - 已覆盖每个发布观察点的进程中断恢复和并发 writer 测试；
-- 下一切片实现多 Segment 装载与 `update`，随后再加入 Tombstone、`remove` 和
-  `compact`。
+- 已按最新路径记录构造跨 Segment 可见性映射，并复用现有查询与 BM25 路径。
 
 ### 退出条件
 
@@ -135,7 +137,7 @@ Segment 装载和 `update`；自定义临时目录与 AArch64 实测继续暂缓
 - 更新操作可安全重复执行；
 - 在提交过程的任意故障点退出，目录可解析为完整旧 generation 或完整新 generation；
 - Compaction 前后查询结果一致；
-- 达到这些条件后发布首个 `1.0.0`。
+- 以上条件已纳入 `0.2.0`。
 
 ## 9. M6：性能工程
 
@@ -182,9 +184,9 @@ Segment 装载和 `update`；自定义临时目录与 AArch64 实测继续暂缓
 
 ## 12. 推荐近期任务顺序
 
-完成 M5 单 Segment 可靠发布底座后建议依次推进：
+完成 M5 后建议依次推进：
 
-1. 增加多 Segment 目录装载和 `update`；
-2. 加入 Tombstone、`remove` 与 `compact`；
-3. 增加自定义临时目录并定义跨文件系统发布规则；
-4. 在 AArch64 环境验证峰值 RSS、索引兼容性和查询结果。
+1. 增加自定义临时目录并定义跨文件系统发布规则；
+2. 在 AArch64 环境验证峰值 RSS、索引兼容性和查询结果；
+3. 进入 M6，先建立增量更新与压缩的可复现基准；
+4. 评估 Delta/Varint 与查询 I/O 优化。

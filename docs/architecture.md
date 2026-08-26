@@ -1,18 +1,20 @@
 # 架构说明
 
 SnowSeek 按依赖方向拆分为 `filesystem/document/analysis`、`index/storage`、
-`query/ranking` 和 `cli`。CLI 只负责参数与输出；核心能力通过 `snowseek_core`
-提供，便于以后嵌入其他本地程序。
+`query/ranking` 和 `cli`。CLI 只负责参数与输出；嵌入方只通过
+`snowseek/index.hpp`、`snowseek/search.hpp` 和 `snowseek/version.hpp` 使用核心能力。
+其余头文件和数据结构均属于 `src` 私有实现。
 
 ```text
-CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Storage
-      └── QueryEngine ── Parser + Boolean/Phrase evaluator ── BM25 + Top-K
-                                                   └───────── Source snippets
+CLI / embedding ──┬── IndexWriter ── Scanner + Tokenizer ── Segment/Storage
+                  └── Searcher(PImpl) ── Parser + Boolean/Phrase evaluator
+                                       └── BM25 + Top-K ── Source snippets
 ```
 
-当前磁盘索引仍只激活一个不可变 Segment，但由 Manifest 选择活动 SegmentId；多
-Segment 查询、Tombstone 和增量命令留给 M5 后续切片。
-所有跨平台磁盘数据使用固定宽度整数和显式字节序。首版 Segment 的精确布局和
+当前磁盘索引由 Manifest 选择一个或多个不可变 Segment。Segment v2 的 Document
+记录保存可选内容 CRC32C 和 Tombstone 状态；0.2 reader 只接受 Segment v2 和
+Manifest v1。
+所有跨平台磁盘数据使用固定宽度整数和显式字节序。Segment v2 的精确布局和
 兼容性规则见 [index-format.md](index-format.md)。
 
 `document::TextReader` 使用固定大小缓冲区读取原文，并通过回调输出不跨越 UTF-8
@@ -32,23 +34,26 @@ Segment 查询、Tombstone 和增量命令留给 M5 后续切片。
 提交 Posting，避免读取或分析失败留下半个文档。文档修改时间统一记录为 Unix Epoch
 纳秒。
 
-M2 使用单个不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
+M2 使用不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
 Header 与每个区域分别使用 CRC32C 校验，所有整数显式使用小端编码；加载器在构造
-查询结构前验证版本、边界、顺序、计数与校验和。查询仍只读取一个最终 Segment。
+查询结构前验证版本、边界、顺序、计数与校验和。目录加载器先验证全部活动 Segment
+并按路径求最后状态，再只为可见 live 文档装载与重映射 Posting，因此现有查询器看到
+的是一个连续的逻辑索引。
 
-M3 的 `query::parse_query` 将表达式解析为有深度上限的 AST，`QueryEngine` 对有序
-DocumentId 集合执行布尔运算，短语命中额外验证连续 Position。AND 子树按估算文档
+M3 的私有查询解析器将表达式解析为有深度上限的 AST，布尔求值器对有序 DocumentId
+集合执行集合运算，短语命中额外验证连续 Position。`Searcher::search` 只编排校验、
+解析、求值、Top-K、解释和 snippet。AND 子树按估算文档
 频率从小到大求交；匹配文档按正向去重词项的 BM25 之和评分，通过固定容量堆保留
-Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 v1 索引，调用方可显式提供
+Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 Segment，调用方可显式提供
 `source_root`，引擎只为最终 Top-K 读取原文并生成 UTF-8 行片段。
 
 M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算。持久化构建在
 `DocumentStore + dictionary + postings` 达到默认 128 MiB 后，于文档边界将当前批次
-写为私有工作区内的 v1 Segment；单个超大文档允许越过阈值一次。临时 Segment 使用
+写为私有工作区内的 v2 Segment；单个超大文档允许越过阈值一次。临时 Segment 使用
 局部 DocumentId，最终归并按批次基址重映射为全局连续 ID。
 
 多 Segment 归并为词典建立一个最小堆游标。第一遍统计唯一词数，第二遍依次写 term
-记录、term 字节、Postings 和 Positions spool，再用固定缓冲拼装最终 v1 文件并增量
+记录、term 字节、Postings 和 Positions spool，再用固定缓冲拼装最终 v2 文件并增量
 计算 CRC32C。构建器默认每组最多归并 16 个 Segment；输入更多时按文档顺序逐层
 生成中间 Segment，每组输出通过流式校验后才删除对应输入，最终候选通过相同校验后
 才交给目录发布事务。Segment 内部格式没有变化。
@@ -66,11 +71,11 @@ M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算�
 超限属于致命构建错误，不作为普通坏文件跳过。该限制不统计 allocator、线程栈和
 writer 序列化缓冲，独立的 `memory_peak_bytes` 用于验证成功构建未突破分类预算。
 
-Minimal 档位关闭 Position：Posting 仍保存词频，v1 feature flag 清零、Positions 区
+Minimal 档位关闭 Position：Posting 仍保存词频，feature flag 清零、Positions 区
 为空且 offset 为零。加载、验证和归并均保留该能力位；词项、布尔和 BM25 查询继续
 工作，短语查询因缺少位置数据而明确拒绝。
 
-M5 首个切片在索引目录上增加独占 `flock`。writer 持锁完成残留清理、构建和发布；
+M5 在索引目录上增加独占 `flock`。writer 持锁完成残留清理、构建和发布；
 恢复只识别 `.snowseek-build-*`、`.snowseek-manifest-*` 和严格合法的 Segment 文件名，
 未知文件保持不动。残留 Segment 的最大 ID 也参与下一 ID 计算，因此崩溃不会导致
 标识符复用。
@@ -81,3 +86,20 @@ Manifest rename 是可见 generation 的切换点。只有新 Manifest 的目录
 才删除旧 Segment。提交前失败保留旧 generation，提交后清理失败记录诊断并由下一次
 writer 恢复。无锁 reader 若正好跨越提交，会重试尚未打开的旧路径；已打开的旧文件
 即使被 unlink 仍保持完整，因此查询只得到完整旧 generation 或完整新 generation。
+
+`update` 对扫描文件执行稳定的 `stat → 原始字节 CRC32C → stat`，仅对新增或变化
+文件分波并行解析；提交仍按路径顺序发生。源中消失的 live 路径写入 Tombstone。
+`remove` 使用大小写敏感 `fnmatch(..., 0)` 选择 live 路径。两者通常向 Manifest 追加
+delta Segment；超过 16 个活动 Segment 时先尝试自动压缩，失败仍允许提交 delta 并
+返回维护诊断。
+
+跨 Segment 可见性由 `(Manifest 顺序, Segment 内 DocumentId)` 的最后记录决定。
+`compact` 丢弃 Tombstone 和被覆盖记录，过滤失去文档的 Posting，并重映射为一个
+无 Tombstone v2 Segment。Manifest rename 仍是唯一提交点，发布后只删除
+`old_active - new_active`。
+
+0.2 不再把 AST、内存索引或磁盘结构作为公开 C++ API。`IndexWriter` 绑定目标目录与
+`IndexOptions`，并用 `IndexOutcome`、具名计数、精简指标和分阶段诊断返回维护结果；
+`Searcher` 以 PImpl 隐藏加载结构，snippet 用 `optional<SourceSnippet>` 表达未请求或
+不可读。读取 Segment v1 或无 Manifest 目录会要求重新构建；`index` 发布新 v2
+Manifest 后才清理旧固定 Segment，因此提交前失败不会破坏旧目录。
