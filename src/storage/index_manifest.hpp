@@ -29,10 +29,11 @@ struct IndexManifest {
 [[nodiscard]] std::string segment_file_name(SegmentId segment_id);
 
 /**
- * @brief Encodes and checksums one single-Segment Manifest v1.
+ * @brief Encodes and checksums one ordered nonempty Manifest v1 Segment set.
  * @param manifest Generation, next identifier, and active SegmentId.
  * @return Complete little-endian Manifest bytes.
- * @throws std::runtime_error If a Manifest invariant is violated.
+ * @throws std::runtime_error If a Manifest invariant or count limit is
+ * violated.
  */
 [[nodiscard]] std::string encode_manifest(const IndexManifest &manifest);
 

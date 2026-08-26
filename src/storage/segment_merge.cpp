@@ -1,10 +1,11 @@
 #include "storage/segment_merge.hpp"
 
-#include "snowseek/common/checked_arithmetic.hpp"
-#include "snowseek/storage/binary_codec.hpp"
-#include "snowseek/storage/checksum.hpp"
-#include "snowseek/storage/index_header.hpp"
+#include "common/checked_arithmetic.hpp"
+#include "storage/binary_codec.hpp"
+#include "storage/checksum.hpp"
+#include "storage/index_header.hpp"
 #include "storage/index_file_internal.hpp"
+#include "storage/segment_format_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -24,17 +25,7 @@
 namespace snowseek::storage::detail {
 namespace {
 
-constexpr std::uint64_t kTermRecordSize = 32;
-constexpr std::uint64_t kPostingRecordSize = 16;
 constexpr std::size_t kCopyBufferSize = 64 * 1024;
-
-struct TermRecord {
-        std::uint64_t term_offset{};
-        std::uint32_t term_length{};
-        std::uint32_t document_frequency{};
-        std::uint64_t posting_offset{};
-        std::uint64_t posting_length{};
-};
 
 using common::detail::checked_add;
 using common::detail::checked_multiply;
@@ -43,7 +34,7 @@ using detail::read_exact;
 using detail::seek_to;
 
 /**
- * @brief Narrows a v1 integer after checking the destination range.
+ * @brief Narrows a Segment integer after checking the destination range.
  * @tparam Destination Unsigned destination type.
  * @param value Source value.
  * @param field Field named in a range diagnostic.
@@ -55,7 +46,7 @@ template <typename Destination>
                                          std::string_view field) {
         if (value > std::numeric_limits<Destination>::max()) {
                 throw std::runtime_error(std::string(field) +
-                                         " exceeds the v1 format limit");
+                                         " exceeds the Segment format limit");
         }
         return static_cast<Destination>(value);
 }
@@ -102,7 +93,7 @@ void remove_spool(const std::filesystem::path &path) {
 }
 
 /**
- * @brief Reads one validated v1 header from a Segment.
+ * @brief Reads one validated v2 header from a Segment.
  * @param path Segment path.
  * @return Decoded header.
  * @throws std::runtime_error If opening or header decoding fails.
@@ -129,7 +120,8 @@ class TermCursor {
               positions_(open_input(source.path)),
               document_base_(document_base),
               has_positions_((header_.feature_flags & kFeaturePositions) != 0) {
-                seek_to(term_records_, header_.sections[2].offset);
+                seek_to(term_records_,
+                        section(header_, SectionKind::terms).offset);
                 term_count_ = read_u64_le(term_records_);
                 if (term_count_ != source.stats.term_count) {
                         throw std::runtime_error(
@@ -160,13 +152,10 @@ class TermCursor {
                         term_.clear();
                         return;
                 }
-                record_ = TermRecord{
-                        read_u64_le(term_records_), read_u32_le(term_records_),
-                        read_u32_le(term_records_), read_u64_le(term_records_),
-                        read_u64_le(term_records_)};
+                record_ = read_term_record(term_records_);
                 term_.assign(record_.term_length, '\0');
                 seek_to(term_bytes_,
-                        checked_add(header_.sections[2].offset,
+                        checked_add(section(header_, SectionKind::terms).offset,
                                     record_.term_offset, "term offset"));
                 read_exact(term_bytes_, term_.data(), term_.size());
                 ++term_index_;
@@ -179,38 +168,41 @@ class TermCursor {
          * @param positions_output Destination Position values spool.
          * @param output_position_offset Current byte offset in final Positions.
          * @throws std::runtime_error If an input is malformed, an ID exceeds
-         * v1 limits, or writing fails.
+         * format limits, or writing fails.
          */
         void copy_postings(std::ostream &postings_output,
                            std::ostream &positions_output,
                            std::uint64_t &output_position_offset) {
                 seek_to(postings_,
-                        checked_add(header_.sections[3].offset,
+                        checked_add(
+                                section(header_, SectionKind::postings).offset,
                                     record_.posting_offset, "posting offset"));
                 for (std::uint32_t index = 0;
                      index < record_.document_frequency; ++index) {
-                        const auto local_document = read_u32_le(postings_);
-                        const auto frequency = read_u32_le(postings_);
-                        const auto position_offset = read_u64_le(postings_);
+                        const auto posting = read_posting_record(postings_);
                         const auto global_document =
                                 checked_narrow<std::uint32_t>(
                                         checked_add(document_base_,
-                                                    local_document,
+                                                    posting.document_id,
                                                     "global document id"),
                                         "global document id");
-                        write_u32_le(postings_output, global_document);
-                        write_u32_le(postings_output, frequency);
-                        write_u64_le(postings_output,
-                                     has_positions_ ? output_position_offset
-                                                    : 0);
+                        write_posting_record(
+                                postings_output,
+                                PostingRecord{
+                                        global_document, posting.frequency,
+                                        has_positions_ ? output_position_offset
+                                                       : 0});
 
                         if (has_positions_) {
                                 seek_to(positions_,
-                                        checked_add(header_.sections[4].offset,
-                                                    position_offset,
+                                        checked_add(
+                                                section(header_,
+                                                        SectionKind::positions)
+                                                        .offset,
+                                                posting.position_offset,
                                                     "position offset"));
                                 for (std::uint32_t position_index = 0;
-                                     position_index < frequency;
+                                     position_index < posting.frequency;
                                      ++position_index) {
                                         write_u32_le(positions_output,
                                                      read_u32_le(positions_));
@@ -218,10 +210,11 @@ class TermCursor {
                                 output_position_offset = checked_add(
                                         output_position_offset,
                                         checked_multiply(
-                                                frequency, 4,
+                                                posting.frequency,
+                                                kPositionRecordSize,
                                                 "position byte length"),
                                         "position offset");
-                        } else if (position_offset != 0) {
+                        } else if (posting.position_offset != 0) {
                                 throw std::runtime_error("positionless Segment "
                                                          "has nonzero offset");
                         }
@@ -257,9 +250,9 @@ void walk_terms(const std::vector<SegmentSource> &sources, Consumer consumer) {
         std::uint64_t document_base = 0;
         for (const auto &source : sources) {
                 cursors.emplace_back(source, document_base);
-                document_base =
-                        checked_add(document_base, source.stats.document_count,
-                                    "document count");
+                document_base = checked_add(
+                        document_base, source.stats.physical_document_count,
+                        "document count");
         }
 
         const auto compare = [&cursors](std::size_t left, std::size_t right) {
@@ -311,7 +304,8 @@ void merge_documents(const std::vector<SegmentSource> &sources,
         std::uint64_t document_count = 0;
         for (const auto &source : sources) {
                 document_count =
-                        checked_add(document_count, source.stats.document_count,
+                        checked_add(document_count,
+                                    source.stats.physical_document_count,
                                     "document count");
         }
         write_u64_le(documents_output, document_count);
@@ -322,47 +316,46 @@ void merge_documents(const std::vector<SegmentSource> &sources,
                 const auto header = read_segment_header(source.path);
                 auto documents_input = open_input(source.path);
                 auto paths_input = open_input(source.path);
-                seek_to(documents_input, header.sections[0].offset);
+                seek_to(documents_input,
+                        section(header, SectionKind::documents).offset);
                 const auto local_count = read_u64_le(documents_input);
-                if (local_count != source.stats.document_count) {
+                if (local_count !=
+                    source.stats.physical_document_count) {
                         throw std::runtime_error(
                                 "temporary Segment document count mismatch");
                 }
                 for (std::uint64_t index = 0; index < local_count; ++index) {
-                        const auto local_id = read_u32_le(documents_input);
-                        const auto path_length = read_u32_le(documents_input);
-                        const auto path_offset = read_u64_le(documents_input);
-                        const auto file_size = read_u64_le(documents_input);
-                        const auto modified_time = read_u64_le(documents_input);
-                        const auto token_count = read_u32_le(documents_input);
-                        const auto reserved = read_u32_le(documents_input);
-                        if (local_id != index || reserved != 0) {
+                        auto record = read_document_record(documents_input);
+                        const auto input_path_offset = record.path_offset;
+                        if (record.document_id != index ||
+                            record.reserved != 0 ||
+                            (record.flags & ~kSupportedDocumentFlags) != 0) {
                                 throw std::runtime_error(
                                         "invalid temporary document record");
                         }
                         const auto global_id = checked_narrow<std::uint32_t>(
-                                checked_add(document_base, local_id,
+                                checked_add(document_base, record.document_id,
                                             "global document id"),
                                 "global document id");
-                        write_u32_le(documents_output, global_id);
-                        write_u32_le(documents_output, path_length);
-                        write_u64_le(documents_output, output_path_offset);
-                        write_u64_le(documents_output, file_size);
-                        write_u64_le(documents_output, modified_time);
-                        write_u32_le(documents_output, token_count);
-                        write_u32_le(documents_output, 0);
+                        record.document_id = global_id;
+                        record.path_offset = output_path_offset;
+                        write_document_record(documents_output, record);
 
-                        std::string path_bytes(path_length, '\0');
+                        std::string path_bytes(record.path_length, '\0');
                         seek_to(paths_input,
-                                checked_add(header.sections[1].offset,
-                                            path_offset, "path offset"));
+                                checked_add(
+                                        section(header, SectionKind::paths)
+                                                .offset,
+                                        input_path_offset,
+                                        "path offset"));
                         read_exact(paths_input, path_bytes.data(),
                                    path_bytes.size());
                         paths_output.write(path_bytes.data(),
                                            static_cast<std::streamsize>(
                                                    path_bytes.size()));
                         output_path_offset =
-                                checked_add(output_path_offset, path_length,
+                                checked_add(output_path_offset,
+                                            record.path_length,
                                             "paths section length");
                 }
                 document_base = checked_add(document_base, local_count,
@@ -467,7 +460,7 @@ std::uint64_t merge_index_files(const std::filesystem::path &output,
         finish_output(documents_output);
         finish_output(paths_output);
 
-        // The first term pass discovers the fixed table size required by v1.
+        // The first term pass discovers the fixed term-table size.
         std::uint64_t term_count = 0;
         walk_terms(sources, [&term_count](const std::string &,
                                           const std::vector<std::size_t> &,
@@ -502,17 +495,17 @@ std::uint64_t merge_index_files(const std::filesystem::path &output,
                 const auto posting_length =
                         checked_multiply(document_frequency, kPostingRecordSize,
                                          "term posting length");
-                write_u64_le(term_records_output,
-                             checked_add(term_bytes_begin, term_bytes_written,
-                                         "term offset"));
-                write_u32_le(term_records_output,
-                             checked_narrow<std::uint32_t>(term.size(),
-                                                           "term length"));
-                write_u32_le(term_records_output,
-                             checked_narrow<std::uint32_t>(
-                                     document_frequency, "document frequency"));
-                write_u64_le(term_records_output, posting_offset);
-                write_u64_le(term_records_output, posting_length);
+                write_term_record(
+                        term_records_output,
+                        TermRecord{
+                                checked_add(term_bytes_begin,
+                                            term_bytes_written, "term offset"),
+                                checked_narrow<std::uint32_t>(term.size(),
+                                                              "term length"),
+                                checked_narrow<std::uint32_t>(
+                                        document_frequency,
+                                        "document frequency"),
+                                posting_offset, posting_length});
                 term_bytes_output.write(
                         term.data(), static_cast<std::streamsize>(term.size()));
 
@@ -548,7 +541,8 @@ std::uint64_t merge_index_files(const std::filesystem::path &output,
                                {positions_path}}};
         const auto term_count_prefix = encode_u64(term_count);
         for (std::size_t index = 0; index < section_parts.size(); ++index) {
-                auto &descriptor = header.sections[index];
+                auto &descriptor =
+                        section(header, kIndexSectionOrder[index]);
                 descriptor.offset = file_offset;
                 Crc32c checksum;
                 std::uint64_t section_length = 0;

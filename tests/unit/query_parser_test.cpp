@@ -1,4 +1,4 @@
-#include "snowseek/query/query_parser.hpp"
+#include "query/query_parser.hpp"
 
 #include "test_support.hpp"
 

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(SnowSeek VERSION 0.1.0 LANGUAGES CXX)
+project(SnowSeek VERSION 0.2.0 LANGUAGES CXX)
 
 find_package(Threads REQUIRED)
 
@@ -23,10 +23,14 @@ add_library(snowseek_core
     src/document/text_reader.cpp
     src/filesystem/scanner.cpp
     src/index/index.cpp
+    src/index/document_parser.cpp
+    src/index/full_index_build.cpp
     src/index/index_builder.cpp
-    src/query/posting_operations.cpp
+    src/index/index_maintenance.cpp
+    src/index/index_writer.cpp
     src/query/query_parser.cpp
-    src/query/query_engine.cpp
+    src/query/query_evaluator.cpp
+    src/query/search.cpp
     src/ranking/bm25.cpp
     src/storage/binary_codec.cpp
     src/storage/checksum.cpp
@@ -52,6 +56,7 @@ snowseek_enable_warnings(snowseek_core)
 
 add_executable(snowseek src/cli/main.cpp src/cli/application.cpp)
 target_link_libraries(snowseek PRIVATE SnowSeek::core)
+target_include_directories(snowseek PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_features(snowseek PRIVATE cxx_std_20)
 snowseek_enable_warnings(snowseek)
 

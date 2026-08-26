@@ -1,7 +1,7 @@
-#include "snowseek/storage/index_header.hpp"
+#include "storage/index_header.hpp"
 
-#include "snowseek/storage/binary_codec.hpp"
-#include "snowseek/storage/checksum.hpp"
+#include "storage/binary_codec.hpp"
+#include "storage/checksum.hpp"
 
 #include "test_support.hpp"
 
@@ -144,7 +144,8 @@ void writes_stable_header_layout() {
                             snowseek::storage::kIndexMagic.end()),
                 "serialized header should begin with SnowSeek magic");
         snowseek::test::require(
-                static_cast<unsigned char>(bytes[8]) == 1U &&
+                static_cast<unsigned char>(bytes[8]) ==
+                                snowseek::storage::kIndexFormatVersion &&
                         static_cast<unsigned char>(bytes[16]) == 200U &&
                         static_cast<unsigned char>(bytes[20]) == 5U,
                 "fixed header fields should occupy their documented offsets");
@@ -174,7 +175,7 @@ void rejects_invalid_identity_and_size_fields() {
         require_rejected(invalid_magic, "invalid magic should be rejected");
 
         auto invalid_version = valid;
-        set_u32(invalid_version, 8, 2);
+        set_u32(invalid_version, 8, 3);
         refresh_checksum(invalid_version);
         require_rejected(invalid_version,
                          "unsupported versions should be rejected");

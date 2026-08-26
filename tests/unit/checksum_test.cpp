@@ -1,4 +1,4 @@
-#include "snowseek/storage/checksum.hpp"
+#include "storage/checksum.hpp"
 
 #include "test_support.hpp"
 

@@ -1,4 +1,4 @@
-#include "snowseek/index/index.hpp"
+#include "index/index.hpp"
 
 #include "test_support.hpp"
 

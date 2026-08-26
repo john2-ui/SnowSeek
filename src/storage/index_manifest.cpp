@@ -1,11 +1,12 @@
-#include "snowseek/storage/index_manifest.hpp"
+#include "storage/index_manifest.hpp"
 
-#include "snowseek/storage/binary_codec.hpp"
-#include "snowseek/storage/checksum.hpp"
+#include "storage/binary_codec.hpp"
+#include "storage/checksum.hpp"
 
 #include <array>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -23,15 +24,21 @@ void validate_manifest(const IndexManifest &manifest) {
         if (manifest.generation == 0) {
                 throw std::runtime_error("manifest generation must be nonzero");
         }
-        if (manifest.active_segments.size() != 1) {
+        if (manifest.active_segments.empty() ||
+            manifest.active_segments.size() >
+                    std::numeric_limits<std::uint32_t>::max()) {
                 throw std::runtime_error(
-                        "Manifest v1 requires exactly one active Segment");
+                        "Manifest requires a representable nonempty Segment list");
         }
-        const auto active_segment = manifest.active_segments.front();
-        if (active_segment == 0) {
-                throw std::runtime_error("manifest SegmentId must be nonzero");
+        SegmentId previous = 0;
+        for (const auto segment : manifest.active_segments) {
+                if (segment == 0 || segment <= previous) {
+                        throw std::runtime_error(
+                                "Manifest SegmentIds must be nonzero and strictly increasing");
+                }
+                previous = segment;
         }
-        if (manifest.next_segment_id <= active_segment) {
+        if (manifest.next_segment_id <= manifest.active_segments.back()) {
                 throw std::runtime_error(
                         "manifest next SegmentId must exceed active SegmentIds");
         }
@@ -75,7 +82,9 @@ std::string segment_file_name(SegmentId segment_id) {
 std::string encode_manifest(const IndexManifest &manifest) {
         validate_manifest(manifest);
         std::ostringstream payload_stream(std::ios::out | std::ios::binary);
-        write_u64_le(payload_stream, manifest.active_segments.front());
+        for (const auto segment : manifest.active_segments) {
+                write_u64_le(payload_stream, segment);
+        }
         const auto payload = payload_stream.str();
         const auto prefix = encode_header_prefix(
                 manifest, static_cast<std::uint64_t>(payload.size()),
@@ -128,11 +137,12 @@ IndexManifest decode_manifest(std::string_view bytes) {
         if (header_size != kManifestHeaderSize) {
                 throw std::runtime_error("unsupported Manifest header size");
         }
-        if (active_count != 1) {
+        if (active_count == 0) {
                 throw std::runtime_error(
-                        "Manifest v1 requires exactly one active Segment");
+                        "Manifest requires at least one active Segment");
         }
-        if (payload_length != static_cast<std::uint64_t>(active_count) * 8) {
+        if (payload_length !=
+            static_cast<std::uint64_t>(active_count) * sizeof(SegmentId)) {
                 throw std::runtime_error("Manifest payload length is inconsistent");
         }
         if (bytes.size() != kManifestHeaderSize + payload_length) {
@@ -148,7 +158,10 @@ IndexManifest decode_manifest(std::string_view bytes) {
         }
         std::istringstream payload_input(std::string(payload),
                                          std::ios::in | std::ios::binary);
-        manifest.active_segments.push_back(read_u64_le(payload_input));
+        manifest.active_segments.reserve(active_count);
+        for (std::uint32_t index = 0; index < active_count; ++index) {
+                manifest.active_segments.push_back(read_u64_le(payload_input));
+        }
         validate_manifest(manifest);
         return manifest;
 }
@@ -159,20 +172,21 @@ IndexManifest read_manifest_file(const std::filesystem::path &path) {
                 throw std::runtime_error("failed to open Manifest: " +
                                          path.string());
         }
-        constexpr std::size_t expected_size =
-                kManifestHeaderSize + sizeof(SegmentId);
-        std::string bytes(expected_size + 1, '\0');
-        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-        const auto bytes_read = input.gcount();
-        if (input.bad()) {
-                throw std::runtime_error("failed to read Manifest: " +
-                                         path.string());
-        }
-        if (bytes_read != static_cast<std::streamsize>(expected_size)) {
+        std::error_code size_error;
+        const auto file_size = std::filesystem::file_size(path, size_error);
+        if (size_error || file_size < kManifestHeaderSize ||
+            file_size > std::numeric_limits<std::size_t>::max() ||
+            file_size > static_cast<std::uintmax_t>(
+                                std::numeric_limits<std::streamsize>::max())) {
                 throw std::runtime_error(
                         "Manifest file length is inconsistent");
         }
-        bytes.resize(expected_size);
+        std::string bytes(static_cast<std::size_t>(file_size), '\0');
+        input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+        if (!input || static_cast<std::size_t>(input.gcount()) != bytes.size()) {
+                throw std::runtime_error("failed to read Manifest: " +
+                                         path.string());
+        }
         return decode_manifest(bytes);
 }
 

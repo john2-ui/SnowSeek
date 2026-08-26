@@ -1,4 +1,4 @@
-#include "snowseek/document/document_store.hpp"
+#include "document/document_store.hpp"
 
 #include "test_support.hpp"
 

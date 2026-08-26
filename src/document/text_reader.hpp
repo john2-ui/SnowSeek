@@ -47,6 +47,7 @@ class InvalidUtf8Error final : public std::runtime_error {
 
 // The supplied string_view remains valid only for the duration of the call.
 using TextChunkConsumer = std::function<void(std::string_view)>;
+using SourceChunkConsumer = std::function<void(std::string_view)>;
 
 class TextReader {
       public:
@@ -63,6 +64,8 @@ class TextReader {
          * @param path Text file to read in binary mode.
          * @param consumer Callback invoked with each nonempty output chunk; its
          * string_view is valid only for the duration of the callback.
+         * @param source_consumer Optional callback observing each raw input
+         * chunk before UTF-8 decoding; its view has callback-only lifetime.
          * @return Source, output, and invalid-sequence byte statistics.
          * @throws std::invalid_argument If consumer is empty.
          * @throws std::runtime_error If the file cannot be opened or read.
@@ -70,7 +73,8 @@ class TextReader {
          */
         [[nodiscard]] TextReadStats
         read(const std::filesystem::path &path,
-             const TextChunkConsumer &consumer) const;
+             const TextChunkConsumer &consumer,
+             const SourceChunkConsumer &source_consumer = {}) const;
 
       private:
         TextReadOptions options_;

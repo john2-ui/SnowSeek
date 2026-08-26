@@ -1,10 +1,10 @@
-#include "snowseek/cli/application.hpp"
+#include "cli/application.hpp"
 
-#include "snowseek/common/version.hpp"
-#include "snowseek/index/index_builder.hpp"
-#include "snowseek/query/query_engine.hpp"
-#include "snowseek/storage/index_file.hpp"
+#include "snowseek/index.hpp"
+#include "snowseek/search.hpp"
+#include "snowseek/version.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace snowseek::cli {
 namespace {
@@ -27,14 +28,25 @@ enum class QueryOutputFormat {
         paths_only,
 };
 
-struct IndexCommandOptions {
+enum class MaintenanceCommand {
+        rebuild,
+        update,
+        remove,
+        compact,
+};
+
+struct SourceCommandOptions {
         std::filesystem::path index_directory;
-        index::PersistentBuildOptions build;
-        index::ResourceProfile profile{index::ResourceProfile::balanced};
+        IndexOptions index;
+};
+
+struct RemoveCommandOptions {
+        IndexOptions index;
+        std::vector<std::string> path_patterns;
 };
 
 struct QueryCommandOptions {
-        query::SearchOptions search;
+        SearchOptions search;
         QueryOutputFormat output = QueryOutputFormat::rich_text;
 };
 
@@ -43,6 +55,9 @@ void print_help() {
         std::cout << "SnowSeek " << kVersion << "\n\n"
                   << "Usage:\n"
                   << "  snowseek index <source> --index <dir> [options]\n"
+                  << "  snowseek update <source> --index <dir> [options]\n"
+                  << "  snowseek remove <index> --path <glob> [options]\n"
+                  << "  snowseek compact <index> [options]\n"
                   << "  snowseek query <index> <expression> [options]\n"
                   << "  snowseek stats|verify <index>\n";
         std::cout << "\nIndex options:\n"
@@ -57,6 +72,7 @@ void print_help() {
                   << "  --merge-fan-in <N>              Merge at most N "
                      "Segments (min 2)\n"
                   << "  Sizes accept B, KiB, MiB, GiB, or TiB suffixes\n"
+                  << "  remove accepts repeated --path options\n"
                   << "\nQuery options:\n"
                   << "  --source <dir>   Read Top-K source snippets\n"
                   << "  --top-k <N>      Return at most N results (max 1000)\n"
@@ -154,106 +170,168 @@ parse_byte_size(std::string_view text,
  * @return Corresponding resource profile.
  * @throws std::invalid_argument If the name is unsupported.
  */
-[[nodiscard]] index::ResourceProfile
-parse_resource_profile(std::string_view text) {
+[[nodiscard]] ResourceProfile parse_resource_profile(std::string_view text) {
         if (text == "minimal") {
-                return index::ResourceProfile::minimal;
+                return ResourceProfile::minimal;
         }
         if (text == "balanced") {
-                return index::ResourceProfile::balanced;
+                return ResourceProfile::balanced;
         }
         if (text == "performance") {
-                return index::ResourceProfile::performance;
+                return ResourceProfile::performance;
         }
         throw std::invalid_argument(
                 "--profile requires minimal, balanced, or performance");
 }
 
-/** @brief Returns the stable CLI spelling of a resource profile. */
-[[nodiscard]] std::string_view
-resource_profile_name(index::ResourceProfile profile) noexcept {
-        switch (profile) {
-        case index::ResourceProfile::minimal:
-                return "minimal";
-        case index::ResourceProfile::balanced:
-                return "balanced";
-        case index::ResourceProfile::performance:
-                return "performance";
+struct ResourceParseState {
+        IndexOptions options;
+        bool has_profile{};
+};
+
+/**
+ * @brief Consumes one shared resource option when the name is recognized.
+ * @param option Candidate option name.
+ * @param argument Current argv index, advanced when a value is consumed.
+ * @param argc Full process argument count.
+ * @param argv Writable process argument vector.
+ * @param state Resource values and duplicate tracking to update.
+ * @return True when option names a shared resource setting.
+ * @throws std::invalid_argument If a recognized option is missing or repeated.
+ */
+bool consume_resource_option(std::string_view option, int &argument, int argc,
+                             char *argv[], ResourceParseState &state) {
+        const bool recognized = option == "--temporary-space-limit" ||
+                                option == "--merge-fan-in" ||
+                                option == "--memory-limit" ||
+                                option == "--threads" || option == "--profile";
+        if (!recognized) {
+                return false;
         }
-        return "balanced";
+        if (argument + 1 >= argc) {
+                throw std::invalid_argument(std::string(option) +
+                                            " requires a value");
+        }
+        if (option == "--temporary-space-limit" &&
+            !state.options.temporary_space_limit_bytes.has_value()) {
+                state.options.temporary_space_limit_bytes =
+                        parse_byte_size(argv[++argument]);
+        } else if (option == "--merge-fan-in" &&
+                   !state.options.merge_fan_in.has_value()) {
+                state.options.merge_fan_in =
+                        parse_merge_fan_in(argv[++argument]);
+        } else if (option == "--memory-limit" &&
+                   !state.options.memory_limit_bytes.has_value()) {
+                state.options.memory_limit_bytes =
+                        parse_byte_size(argv[++argument], "--memory-limit");
+        } else if (option == "--threads" &&
+                   !state.options.worker_threads.has_value()) {
+                state.options.worker_threads =
+                        parse_worker_threads(argv[++argument]);
+        } else if (option == "--profile" && !state.has_profile) {
+                state.options.profile =
+                        parse_resource_profile(argv[++argument]);
+                state.has_profile = true;
+        } else {
+                throw std::invalid_argument(std::string(option) +
+                                            " may appear only once");
+        }
+        return true;
 }
 
 /**
- * @brief Parses persistent index destination and resource options.
+ * @brief Parses index/update destination and shared resource options.
  * @param argc Full process argument count.
  * @param argv Writable process argument vector.
- * @return Validated destination and builder configuration.
+ * @return Validated source-command settings.
  * @throws std::invalid_argument If an option is unknown, missing, or repeated.
  */
-[[nodiscard]] IndexCommandOptions parse_index_options(int argc, char *argv[]) {
-        IndexCommandOptions options;
+[[nodiscard]] SourceCommandOptions parse_source_options(int argc,
+                                                        char *argv[]) {
+        SourceCommandOptions command;
+        ResourceParseState resources;
         bool has_index = false;
-        bool has_profile = false;
-        std::optional<std::uint64_t> temporary_limit;
-        std::optional<std::size_t> merge_fan_in;
-        std::optional<std::uint64_t> memory_limit;
-        std::optional<std::size_t> worker_threads;
         for (int argument = 3; argument < argc; ++argument) {
                 const std::string_view option(argv[argument]);
-                if (argument + 1 >= argc) {
-                        throw std::invalid_argument(std::string(option) +
-                                                    " requires a value");
-                }
                 if (option == "--index" && !has_index) {
-                        options.index_directory = argv[++argument];
+                        if (argument + 1 >= argc) {
+                                throw std::invalid_argument(
+                                        "--index requires a value");
+                        }
+                        command.index_directory = argv[++argument];
                         has_index = true;
-                } else if (option == "--temporary-space-limit" &&
-                           !temporary_limit.has_value()) {
-                        temporary_limit = parse_byte_size(argv[++argument]);
-                } else if (option == "--merge-fan-in" &&
-                           !merge_fan_in.has_value()) {
-                        merge_fan_in = parse_merge_fan_in(argv[++argument]);
-                } else if (option == "--memory-limit" &&
-                           !memory_limit.has_value()) {
-                        memory_limit = parse_byte_size(argv[++argument],
-                                                       "--memory-limit");
-                } else if (option == "--threads" &&
-                           !worker_threads.has_value()) {
-                        worker_threads = parse_worker_threads(argv[++argument]);
-                } else if (option == "--profile" && !has_profile) {
-                        options.profile =
-                                parse_resource_profile(argv[++argument]);
-                        has_profile = true;
-                } else if (option == "--index" ||
-                           option == "--temporary-space-limit" ||
-                           option == "--merge-fan-in" ||
-                           option == "--memory-limit" ||
-                           option == "--threads" || option == "--profile") {
+                } else if (option == "--index") {
                         throw std::invalid_argument(std::string(option) +
                                                     " may appear only once");
-                } else {
-                        throw std::invalid_argument("unknown index option: " +
+                } else if (!consume_resource_option(option, argument, argc,
+                                                    argv, resources)) {
+                        throw std::invalid_argument("unknown source option: " +
                                                     std::string(option));
                 }
         }
-        if (!has_index || options.index_directory.empty()) {
+        if (!has_index || command.index_directory.empty()) {
                 throw std::invalid_argument(
                         "--index requires one unique directory");
         }
-        options.build = index::persistent_build_options(options.profile);
-        if (temporary_limit.has_value()) {
-                options.build.temporary_space_budget_bytes = *temporary_limit;
+        command.index = std::move(resources.options);
+        return command;
+}
+
+/**
+ * @brief Parses repeated removal Globs and shared resource options.
+ * @param argc Full process argument count.
+ * @param argv Writable process argument vector.
+ * @return Validated remove-command settings with duplicate Globs removed.
+ * @throws std::invalid_argument If an option is unknown or incomplete.
+ */
+[[nodiscard]] RemoveCommandOptions parse_remove_options(int argc,
+                                                        char *argv[]) {
+        RemoveCommandOptions command;
+        ResourceParseState resources;
+        for (int argument = 3; argument < argc; ++argument) {
+                const std::string_view option(argv[argument]);
+                if (option == "--path") {
+                        if (argument + 1 >= argc) {
+                                throw std::invalid_argument(
+                                        "--path requires a value");
+                        }
+                        command.path_patterns.emplace_back(argv[++argument]);
+                } else if (!consume_resource_option(option, argument, argc,
+                                                    argv, resources)) {
+                        throw std::invalid_argument("unknown remove option: " +
+                                                    std::string(option));
+                }
         }
-        if (merge_fan_in.has_value()) {
-                options.build.merge_fan_in = *merge_fan_in;
+        std::sort(command.path_patterns.begin(), command.path_patterns.end());
+        command.path_patterns.erase(std::unique(command.path_patterns.begin(),
+                                                command.path_patterns.end()),
+                                    command.path_patterns.end());
+        if (command.path_patterns.empty()) {
+                throw std::invalid_argument(
+                        "remove requires at least one --path");
         }
-        if (memory_limit.has_value()) {
-                options.build.memory_budget_bytes = *memory_limit;
+        command.index = std::move(resources.options);
+        return command;
+}
+
+/**
+ * @brief Parses compact's shared resource options.
+ * @param argc Full process argument count.
+ * @param argv Writable process argument vector.
+ * @return Validated public writer settings.
+ * @throws std::invalid_argument If an option is unknown, missing, or repeated.
+ */
+[[nodiscard]] IndexOptions parse_compact_options(int argc, char *argv[]) {
+        ResourceParseState resources;
+        for (int argument = 3; argument < argc; ++argument) {
+                const std::string_view option(argv[argument]);
+                if (!consume_resource_option(option, argument, argc, argv,
+                                             resources)) {
+                        throw std::invalid_argument("unknown compact option: " +
+                                                    std::string(option));
+                }
         }
-        if (worker_threads.has_value()) {
-                options.build.worker_thread_count = *worker_threads;
-        }
-        return options;
+        return std::move(resources.options);
 }
 
 /**
@@ -395,14 +473,14 @@ void select_output(QueryCommandOptions &options, QueryOutputFormat format) {
  * @brief Prints one human-readable ranked result and optional explanation.
  * @param result Search result to render.
  */
-void print_rich_result(const query::SearchResult &result) {
+void print_rich_result(const SearchHit &result) {
         std::cout << result.path.generic_string();
-        if (result.line != 0) {
-                std::cout << ':' << result.line;
+        if (result.snippet.has_value()) {
+                std::cout << ':' << result.snippet->line;
         }
         std::cout << " score=" << format_score(result.score);
-        if (!result.snippet.empty()) {
-                std::cout << ' ' << result.snippet;
+        if (result.snippet.has_value() && !result.snippet->text.empty()) {
+                std::cout << ' ' << result.snippet->text;
         }
         std::cout << '\n';
         for (const auto &contribution : result.explanation) {
@@ -419,12 +497,15 @@ void print_rich_result(const query::SearchResult &result) {
  * @param result Search result to render.
  * @param include_explanation Whether to include the explanation array.
  */
-void print_json_result(const query::SearchResult &result,
-                       bool include_explanation) {
+void print_json_result(const SearchHit &result, bool include_explanation) {
+        const auto line = result.snippet.has_value() ? result.snippet->line : 0;
+        const std::string_view snippet = result.snippet.has_value()
+                                                 ? result.snippet->text
+                                                 : std::string_view{};
         std::cout << "{\"path\":\"" << json_escape(result.path.generic_string())
-                  << "\",\"line\":" << result.line
+                  << "\",\"line\":" << line
                   << ",\"score\":" << format_score(result.score)
-                  << ",\"snippet\":\"" << json_escape(result.snippet) << '"';
+                  << ",\"snippet\":\"" << json_escape(snippet) << '"';
         if (include_explanation) {
                 std::cout << ",\"explanation\":[";
                 for (std::size_t index = 0; index < result.explanation.size();
@@ -447,75 +528,134 @@ void print_json_result(const query::SearchResult &result,
 }
 
 /**
- * @brief Builds and publishes one persistent v1 Segment.
- * @param source Corpus root to scan.
- * @param options Destination and persistent-build resource limits.
- * @return Zero for a complete index or two when recoverable files were skipped.
+ * @brief Returns the stable key-value spelling of an operation outcome.
+ * @param outcome Public operation outcome.
+ * @return One of unchanged, published, or compacted.
  */
+[[nodiscard]] std::string_view outcome_name(IndexOutcome outcome) noexcept {
+        switch (outcome) {
+        case IndexOutcome::unchanged:
+                return "unchanged";
+        case IndexOutcome::published:
+                return "published";
+        case IndexOutcome::compacted:
+                return "compacted";
+        }
+        return "unchanged";
+}
+
+/**
+ * @brief Returns the stable diagnostic-stage prefix.
+ * @param stage Stage that produced a recoverable warning.
+ * @return Lowercase prefix used on standard error.
+ */
+[[nodiscard]] std::string_view
+diagnostic_stage_name(DiagnosticStage stage) noexcept {
+        switch (stage) {
+        case DiagnosticStage::scan:
+                return "scan";
+        case DiagnosticStage::document:
+                return "document";
+        case DiagnosticStage::cleanup:
+                return "cleanup";
+        case DiagnosticStage::maintenance:
+                return "maintenance";
+        }
+        return "maintenance";
+}
+
+/**
+ * @brief Prints diagnostics and the compact maintenance result protocol.
+ * @param result Completed operation result.
+ * @param command Command selecting the relevant change counters.
+ */
+void print_index_result(const IndexResult &result, MaintenanceCommand command) {
+        for (const auto &diagnostic : result.diagnostics) {
+                std::cerr << diagnostic_stage_name(diagnostic.stage)
+                          << " warning: " << diagnostic.path << ": "
+                          << diagnostic.message << '\n';
+        }
+        std::cout << "outcome=" << outcome_name(result.outcome) << '\n'
+                  << "revision=" << result.revision << '\n'
+                  << "segments=" << result.active_segments << '\n';
+        switch (command) {
+        case MaintenanceCommand::rebuild:
+                std::cout << "indexed=" << result.metrics.indexed_files << '\n'
+                          << "failed=" << result.metrics.failed_files << '\n';
+                break;
+        case MaintenanceCommand::update:
+                std::cout << "added=" << result.changes.added << '\n'
+                          << "modified=" << result.changes.modified << '\n'
+                          << "removed=" << result.changes.removed << '\n'
+                          << "unchanged=" << result.changes.unchanged << '\n'
+                          << "failed=" << result.metrics.failed_files << '\n';
+                break;
+        case MaintenanceCommand::remove:
+                std::cout << "matched=" << result.changes.matched << '\n';
+                break;
+        case MaintenanceCommand::compact:
+                std::cout << "discarded_records="
+                          << result.changes.discarded_records << '\n';
+                break;
+        }
+        std::cout << "memory_peak_bytes=" << result.metrics.peak_memory_bytes
+                  << '\n'
+                  << "temporary_peak_bytes="
+                  << result.metrics.peak_temporary_bytes << '\n'
+                  << "warning_count=" << result.diagnostics.size() << '\n';
+}
+
+/** @brief Returns status two when an operation produced any warning. */
+[[nodiscard]] int index_result_status(const IndexResult &result) noexcept {
+        return result.diagnostics.empty() ? 0 : 2;
+}
+
+/** @brief Builds and publishes one complete persistent index revision. */
 int run_index(const std::filesystem::path &source,
-              const IndexCommandOptions &options) {
-        const auto result = index::IndexBuilder(options.build)
-                                    .build(source, options.index_directory);
-        for (const auto &error : result.scan_errors) {
-                std::cerr << "scan warning: " << error.path << ": "
-                          << error.error.message() << '\n';
-        }
-        for (const auto &error : result.document_errors) {
-                std::cerr << "document warning: " << error.path << ": "
-                          << error.message << '\n';
-        }
-        for (const auto &error : result.cleanup_errors) {
-                std::cerr << "cleanup warning: " << error.path << ": "
-                          << error.message << '\n';
-        }
-        std::cout << "index=" << result.index_file.string() << '\n'
-                  << "segment_id=" << result.segment_id << '\n'
-                  << "manifest_generation=" << result.manifest_generation
-                  << '\n'
-                  << "resource_profile="
-                  << resource_profile_name(options.profile) << '\n'
-                  << "scanned=" << result.stats.scanned_files << '\n'
-                  << "indexed=" << result.stats.indexed_files << '\n'
-                  << "failed=" << result.stats.failed_files << '\n'
-                  << "tokens=" << result.stats.token_count << '\n'
-                  << "memory_metadata_bytes="
-                  << result.stats.memory.metadata_bytes << '\n'
-                  << "memory_reader_peak_bytes="
-                  << result.stats.memory.reader_peak_bytes << '\n'
-                  << "memory_token_peak_bytes="
-                  << result.stats.memory.token_peak_bytes << '\n'
-                  << "memory_dictionary_bytes="
-                  << result.stats.memory.dictionary_bytes << '\n'
-                  << "memory_posting_bytes="
-                  << result.stats.memory.posting_bytes << '\n'
-                  << "memory_estimated_peak_bytes="
-                  << result.stats.memory.estimated_peak_bytes << '\n'
-                  << "memory_limit_bytes=" << options.build.memory_budget_bytes
-                  << '\n'
-                  << "memory_peak_bytes=" << result.memory_peak_bytes << '\n'
-                  << "threads=" << result.worker_thread_count << '\n'
-                  << "positions_enabled=" << result.positions_enabled << '\n'
-                  << "temporary_segment_count="
-                  << result.temporary_segment_count << '\n'
-                  << "temporary_peak_bytes=" << result.temporary_peak_bytes
-                  << '\n'
-                  << "merge_pass_count=" << result.merge_pass_count << '\n';
-        return result.scan_errors.empty() && result.document_errors.empty() &&
-                               result.cleanup_errors.empty()
-                       ? 0
-                       : 2;
+              const SourceCommandOptions &options) {
+        const auto result = IndexWriter(options.index_directory, options.index)
+                                    .rebuild(source);
+        print_index_result(result, MaintenanceCommand::rebuild);
+        return index_result_status(result);
+}
+
+/** @brief Synchronizes a published index with the current source tree. */
+int run_update(const std::filesystem::path &source,
+               const SourceCommandOptions &options) {
+        const auto result = IndexWriter(options.index_directory, options.index)
+                                    .update(source);
+        print_index_result(result, MaintenanceCommand::update);
+        return index_result_status(result);
+}
+
+/** @brief Publishes Tombstones for paths matching one or more Globs. */
+int run_remove(const std::filesystem::path &index_directory,
+               const RemoveCommandOptions &options) {
+        const auto result = IndexWriter(index_directory, options.index)
+                                    .remove(options.path_patterns);
+        print_index_result(result, MaintenanceCommand::remove);
+        return index_result_status(result);
+}
+
+/** @brief Compacts all visible records into one canonical Segment. */
+int run_compact(const std::filesystem::path &index_directory,
+                IndexOptions options) {
+        const auto result =
+                IndexWriter(index_directory, std::move(options)).compact();
+        print_index_result(result, MaintenanceCommand::compact);
+        return index_result_status(result);
 }
 
 /**
  * @brief Executes an M3 query and renders ranked results.
- * @param index_directory Directory containing the v1 Segment.
+ * @param index_directory Directory containing the active Segment set.
  * @param expression Complete Boolean query expression.
  * @param options Search and presentation options.
  * @return Zero after a successful query, including an empty result.
  */
 int run_query(const std::filesystem::path &index_directory,
               std::string_view expression, const QueryCommandOptions &options) {
-        const query::QueryEngine engine(index_directory);
+        const Searcher engine(index_directory);
         for (const auto &result : engine.search(expression, options.search)) {
                 switch (options.output) {
                 case QueryOutputFormat::rich_text:
@@ -534,26 +674,28 @@ int run_query(const std::filesystem::path &index_directory,
 
 /**
  * @brief Prints stable key-value statistics for a validated index.
- * @param index_directory Directory containing the v1 Segment.
+ * @param index_directory Directory containing the active Segment set.
  * @return Zero after successful validation and output.
  */
 int run_stats(const std::filesystem::path &index_directory) {
-        const auto stats = storage::validate_index_directory(index_directory);
-        std::cout << "documents=" << stats.document_count << '\n'
-                  << "terms=" << stats.term_count << '\n'
-                  << "postings=" << stats.posting_count << '\n'
-                  << "positions=" << stats.position_count << '\n'
-                  << "bytes=" << stats.file_size << '\n';
+        const auto stats = validate_index(index_directory);
+        std::cout << "documents=" << stats.documents << '\n'
+                  << "segments=" << stats.segments << '\n'
+                  << "tombstones=" << stats.tombstones << '\n'
+                  << "terms=" << stats.terms << '\n'
+                  << "postings=" << stats.postings << '\n'
+                  << "positions=" << stats.positions << '\n'
+                  << "bytes=" << stats.bytes << '\n';
         return 0;
 }
 
 /**
  * @brief Fully validates an index and reports a concise success message.
- * @param index_directory Directory containing the v1 Segment.
+ * @param index_directory Directory containing the active Segment set.
  * @return Zero when every structural and checksum invariant holds.
  */
 int run_verify(const std::filesystem::path &index_directory) {
-        static_cast<void>(storage::validate_index_directory(index_directory));
+        static_cast<void>(validate_index(index_directory));
         std::cout << "index verified\n";
         return 0;
 }
@@ -577,7 +719,19 @@ int run(int argc, char *argv[]) {
                 const std::string_view command(argv[1]);
                 if (command == "index" && argc >= 3) {
                         return run_index(argv[2],
-                                         parse_index_options(argc, argv));
+                                         parse_source_options(argc, argv));
+                }
+                if (command == "update" && argc >= 3) {
+                        return run_update(argv[2],
+                                          parse_source_options(argc, argv));
+                }
+                if (command == "remove" && argc >= 3) {
+                        return run_remove(argv[2],
+                                          parse_remove_options(argc, argv));
+                }
+                if (command == "compact" && argc >= 3) {
+                        return run_compact(argv[2],
+                                           parse_compact_options(argc, argv));
                 }
                 if (command == "query" && argc >= 4) {
                         return run_query(argv[2], argv[3],

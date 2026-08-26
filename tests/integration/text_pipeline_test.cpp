@@ -1,5 +1,5 @@
-#include "snowseek/analysis/tokenizer.hpp"
-#include "snowseek/document/text_reader.hpp"
+#include "analysis/tokenizer.hpp"
+#include "document/text_reader.hpp"
 
 #include "test_support.hpp"
 

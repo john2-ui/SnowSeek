@@ -1,4 +1,4 @@
-#include "snowseek/ranking/bm25.hpp"
+#include "ranking/bm25.hpp"
 
 #include "test_support.hpp"
 

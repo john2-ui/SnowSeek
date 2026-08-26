@@ -1,6 +1,6 @@
-#include "snowseek/document/document_store.hpp"
+#include "document/document_store.hpp"
 
-#include "snowseek/common/checked_arithmetic.hpp"
+#include "common/checked_arithmetic.hpp"
 
 #include <limits>
 #include <stdexcept>
@@ -16,20 +16,39 @@ using common::detail::checked_multiply;
 
 DocumentId DocumentStore::add(std::filesystem::path path,
                               std::uint64_t file_size,
-                              std::int64_t modified_time_ns) {
+                              std::int64_t modified_time_ns,
+                              std::optional<std::uint32_t> content_crc32c) {
         if (documents_.size() > std::numeric_limits<DocumentId>::max()) {
                 throw std::overflow_error("document id exceeds uint32_t");
         }
 
         const auto id = static_cast<DocumentId>(documents_.size());
         documents_.push_back(DocumentMeta{id, std::move(path), file_size,
-                                          modified_time_ns, 0});
+                                          modified_time_ns, 0,
+                                          DocumentState::live,
+                                          content_crc32c});
+        return id;
+}
+
+DocumentId DocumentStore::add_tombstone(std::filesystem::path path) {
+        if (documents_.size() > std::numeric_limits<DocumentId>::max()) {
+                throw std::overflow_error("document id exceeds uint32_t");
+        }
+        const auto id = static_cast<DocumentId>(documents_.size());
+        documents_.push_back(DocumentMeta{id, std::move(path), 0, 0, 0,
+                                          DocumentState::tombstone,
+                                          std::nullopt});
         return id;
 }
 
 void DocumentStore::set_token_count(DocumentId id, std::uint32_t token_count) {
         if (id >= documents_.size()) {
                 throw std::out_of_range("document id is out of range");
+        }
+        if (documents_[id].state == DocumentState::tombstone &&
+            token_count != 0) {
+                throw std::invalid_argument(
+                        "Tombstone token count must remain zero");
         }
         documents_[id].token_count = token_count;
 }

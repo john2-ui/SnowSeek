@@ -1,4 +1,4 @@
-#include "snowseek/document/text_reader.hpp"
+#include "document/text_reader.hpp"
 
 #include <fstream>
 #include <limits>
@@ -244,7 +244,8 @@ TextReader::TextReader(TextReadOptions options) : options_(options) {
 }
 
 TextReadStats TextReader::read(const std::filesystem::path &path,
-                               const TextChunkConsumer &consumer) const {
+                               const TextChunkConsumer &consumer,
+                               const SourceChunkConsumer &source_consumer) const {
         if (!consumer) {
                 throw std::invalid_argument(
                         "text reader consumer must not be empty");
@@ -266,6 +267,10 @@ TextReadStats TextReader::read(const std::filesystem::path &path,
 
                 if (count > 0) {
                         const auto byte_count = static_cast<std::size_t>(count);
+                        if (source_consumer) {
+                                source_consumer(std::string_view(buffer.data(),
+                                                                 byte_count));
+                        }
                         const std::uint64_t chunk_offset = stats.bytes_read;
                         stats.bytes_read += byte_count;
                         emit_valid_utf8(

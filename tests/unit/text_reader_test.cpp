@@ -1,4 +1,4 @@
-#include "snowseek/document/text_reader.hpp"
+#include "document/text_reader.hpp"
 
 #include "test_support.hpp"
 
@@ -238,6 +238,34 @@ void replaces_truncated_sequence_at_end_of_file() {
                 "a truncated prefix should count as one invalid sequence");
 }
 
+/** @brief Verifies raw observers see source bytes before UTF-8 replacement. */
+void observes_original_source_chunks() {
+        const TemporaryDirectory temporary;
+        const auto path = temporary.path() / "observed.txt";
+        std::string contents{"left"};
+        contents.push_back(static_cast<char>(0xff));
+        contents.append("right");
+        write_file(path, contents);
+
+        snowseek::document::TextReadOptions options;
+        options.chunk_size = 3;
+        const snowseek::document::TextReader reader(options);
+        std::string decoded;
+        std::string observed;
+        static_cast<void>(reader.read(
+                path,
+                [&decoded](std::string_view chunk) { decoded.append(chunk); },
+                [&observed](std::string_view chunk) {
+                        observed.append(chunk);
+                }));
+        snowseek::test::require_equal(
+                observed, contents,
+                "the source observer should receive every original byte once");
+        snowseek::test::require(
+                decoded != contents,
+                "decoded output may replace invalid bytes independently");
+}
+
 /** @brief Verifies empty-file handling and missing-file diagnostics. */
 void handles_empty_and_missing_files() {
         const TemporaryDirectory temporary;
@@ -281,6 +309,8 @@ int main() {
                  rejects_invalid_utf8_with_offset},
                 {"replaces a truncated sequence at EOF",
                  replaces_truncated_sequence_at_end_of_file},
+                {"observes original source chunks",
+                 observes_original_source_chunks},
                 {"handles empty and missing files",
                  handles_empty_and_missing_files},
         });

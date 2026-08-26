@@ -1,6 +1,6 @@
 #pragma once
 
-#include "snowseek/storage/index_file.hpp"
+#include "storage/index_file.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -11,7 +11,8 @@ namespace snowseek::storage::detail {
 
 struct SegmentSource {
         std::filesystem::path path;
-        IndexFileStats stats;
+        /** Validated physical statistics for this Segment. */
+        SegmentStats stats;
 };
 
 /**
@@ -24,11 +25,11 @@ struct SegmentSource {
 estimate_segment_merge_memory(std::size_t source_count);
 
 /**
- * @brief Merges ordered temporary v1 Segments into one byte-compatible file.
+ * @brief Merges ordered temporary v2 Segments into one v2 file.
  * @param output Candidate output path whose parent is used for spool files.
  * @param sources Nonempty Segments in global document order.
  * @return Actual peak spool-plus-output bytes retained during the merge.
- * @throws std::runtime_error If an input is malformed, a v1 limit is exceeded,
+ * @throws std::runtime_error If an input is malformed, a format limit is exceeded,
  * or temporary/output I/O fails.
  */
 [[nodiscard]] std::uint64_t

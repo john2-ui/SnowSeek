@@ -1,4 +1,4 @@
-#include "snowseek/filesystem/scanner.hpp"
+#include "filesystem/scanner.hpp"
 
 #include "test_support.hpp"
 

@@ -1,6 +1,6 @@
-#include "snowseek/query/query_parser.hpp"
+#include "query/query_parser.hpp"
 
-#include "snowseek/analysis/tokenizer.hpp"
+#include "analysis/tokenizer.hpp"
 
 #include <algorithm>
 #include <cctype>

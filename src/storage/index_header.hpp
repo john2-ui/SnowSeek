@@ -9,7 +9,8 @@ namespace snowseek::storage {
 
 inline constexpr std::array<char, 8> kIndexMagic{'S', 'N', 'O', 'W',
                                                  'S', 'E', 'E', 'K'};
-inline constexpr std::uint32_t kIndexFormatVersion = 1;
+inline constexpr std::uint32_t kLegacyIndexFormatVersion = 1;
+inline constexpr std::uint32_t kIndexFormatVersion = 2;
 inline constexpr std::uint32_t kIndexHeaderSize = 200;
 inline constexpr std::size_t kIndexSectionCount = 5;
 inline constexpr std::uint32_t kFeaturePositions = 1U << 0U;
@@ -51,7 +52,7 @@ struct IndexHeader {
  * @brief Writes a SnowSeek index header in its fixed little-endian format.
  * @param output Destination stream positioned at the header location.
  * @param header Version, flags, file size, and ordered section directory.
- * @throws std::runtime_error If the header violates the v1 format invariants
+ * @throws std::runtime_error If the header violates the v2 invariants
  * or the stream cannot write all 200 bytes.
  */
 void write_header(std::ostream &output, const IndexHeader &header);
@@ -59,9 +60,10 @@ void write_header(std::ostream &output, const IndexHeader &header);
 /**
  * @brief Reads and validates a SnowSeek index header.
  * @param input Source stream positioned at the header location.
- * @return The decoded and validated v1 header and section directory.
+ * @return The decoded and validated v2 header and section directory.
  * @throws std::runtime_error If the header is truncated, corrupted, uses an
- * unsupported version or flag, or contains invalid section boundaries.
+ * unsupported version or flag, or contains invalid section boundaries. v1
+ * input is rejected with a rebuild diagnostic.
  */
 [[nodiscard]] IndexHeader read_header(std::istream &input);
 

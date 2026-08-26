@@ -1,4 +1,4 @@
-#include "snowseek/analysis/tokenizer.hpp"
+#include "analysis/tokenizer.hpp"
 
 #include "test_support.hpp"
 

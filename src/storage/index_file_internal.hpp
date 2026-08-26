@@ -1,5 +1,7 @@
 #pragma once
 
+#include "storage/index_file.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -7,20 +9,17 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-
-namespace snowseek::document {
-class DocumentStore;
-}
-
-namespace snowseek::index {
-class InMemoryIndex;
-}
-
-namespace snowseek::storage {
-struct IndexFileStats;
-}
+#include <vector>
 
 namespace snowseek::storage::detail {
+
+/** @brief A fully validated Segment document table without query postings. */
+struct LoadedDocumentTable {
+        document::DocumentStore documents;
+        std::vector<std::uint64_t> token_counts;
+        SegmentStats stats;
+        bool stores_positions{};
+};
 
 /**
  * @brief Serializes one index after enforcing a maximum output file size.
@@ -32,11 +31,35 @@ namespace snowseek::storage::detail {
  * @throws std::runtime_error If encoding fails, the size limit or available
  * filesystem space is insufficient, or the output cannot be written.
  */
-[[nodiscard]] IndexFileStats
+[[nodiscard]] SegmentStats
 write_index_file_bounded(const std::filesystem::path &path,
                          const document::DocumentStore &documents,
                          const index::InMemoryIndex &index,
                          std::uint64_t maximum_file_size);
+
+/**
+ * @brief Validates a Segment and materializes its complete Document table.
+ * @param path Existing v2 Segment.
+ * @return A dedicated document-table result with physical Segment statistics.
+ * @throws std::runtime_error If the Segment is inaccessible or malformed.
+ */
+[[nodiscard]] LoadedDocumentTable
+load_document_table(const std::filesystem::path &path);
+
+/**
+ * @brief Appends visible remapped Postings from a validated Segment table.
+ * @param path Existing v2 Segment matching documents.
+ * @param documents Previously validated document-table metadata.
+ * @param document_remap Local IDs mapped to global IDs; uint64 max drops one.
+ * @param target Combined index receiving retained Postings.
+ * @throws std::runtime_error If the posting records are malformed or the
+ * Segment capabilities differ from target.
+ */
+void append_remapped_postings(
+        const std::filesystem::path &path,
+        const LoadedDocumentTable &documents,
+        const std::vector<std::uint64_t> &document_remap,
+        index::InMemoryIndex &target);
 
 /**
  * @brief Opens an independent binary stream for Segment random access.

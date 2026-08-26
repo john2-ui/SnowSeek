@@ -1,6 +1,6 @@
 #pragma once
 
-#include "snowseek/document/document.hpp"
+#include "document/document.hpp"
 
 #include <cstddef>
 #include <cstdint>

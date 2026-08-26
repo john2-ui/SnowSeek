@@ -1,4 +1,4 @@
-#include "snowseek/cli/application.hpp"
+#include "cli/application.hpp"
 
 /**
  * @brief Delegates process execution to the SnowSeek CLI application.

@@ -1,6 +1,5 @@
-#include "snowseek/index/index_builder.hpp"
-#include "snowseek/query/query_engine.hpp"
-#include "snowseek/storage/index_file.hpp"
+#include "snowseek/index.hpp"
+#include "snowseek/search.hpp"
 
 #include "test_support.hpp"
 
@@ -11,6 +10,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -62,27 +62,27 @@ void builds_reopens_and_queries() {
         write_file(source / "a.txt", "Timeout retry timeout");
         write_file(source / "b.txt", "retry policy");
 
-        const auto report =
-                snowseek::index::IndexBuilder{}.build(source, destination);
-        snowseek::test::require(report.scan_errors.empty() &&
-                                        report.document_errors.empty(),
+        const auto report = snowseek::IndexWriter(destination).rebuild(source);
+        snowseek::test::require(report.diagnostics.empty(),
                                 "valid corpus should persist completely");
         snowseek::test::require(
                 std::filesystem::exists(destination /
-                                        snowseek::storage::kSegmentFileName),
+                                        "segment-0000000000000001.idx"),
                 "the stable Segment filename should be published");
 
-        const snowseek::query::QueryEngine engine(destination);
+        const snowseek::Searcher engine(destination);
         const auto term = engine.search("TIMEOUT");
         snowseek::test::require_equal(term.size(), std::size_t{1},
                                       "term query should survive reopen");
         snowseek::test::require_equal(term[0].path,
                                       std::filesystem::path("a.txt"),
                                       "query paths should be source-relative");
+        snowseek::test::require(!term[0].snippet.has_value(),
+                                "unrequested snippets should remain absent");
         const auto conjunction = engine.search("retry and policy");
         snowseek::test::require_equal(conjunction.size(), std::size_t{1},
                                       "case-insensitive AND should work");
-        snowseek::query::SearchOptions options;
+        snowseek::SearchOptions options;
         options.top_k = 1;
         options.explain = true;
         const auto top = engine.search("retry", options);
@@ -103,9 +103,8 @@ void evaluates_m3_query_language() {
         write_file(source / "b.md", "alpha gamma beta");
         write_file(source / "sub" / "c.TXT", "delta alpha beta");
         write_file(source / "sub" / "repeat.txt", "echo echo");
-        static_cast<void>(
-                snowseek::index::IndexBuilder{}.build(source, destination));
-        const snowseek::query::QueryEngine engine(destination);
+        static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
+        const snowseek::Searcher engine(destination);
 
         const auto phrase = engine.search("\"alpha beta\"");
         snowseek::test::require_equal(
@@ -141,11 +140,11 @@ void rejects_phrases_without_positions() {
         const auto destination = temporary.path() / "index";
         std::filesystem::create_directory(source);
         write_file(source / "a.txt", "alpha beta alpha");
-        const auto options = snowseek::index::persistent_build_options(
-                snowseek::index::ResourceProfile::minimal);
-        static_cast<void>(snowseek::index::IndexBuilder(options).build(
-                source, destination));
-        const snowseek::query::QueryEngine engine(destination);
+        snowseek::IndexOptions options;
+        options.profile = snowseek::ResourceProfile::minimal;
+        static_cast<void>(
+                snowseek::IndexWriter(destination, options).rebuild(source));
+        const snowseek::Searcher engine(destination);
         snowseek::test::require_equal(
                 engine.search("alpha").size(), std::size_t{1},
                 "positionless indexes should support term scoring");
@@ -165,16 +164,10 @@ void ranks_deterministically() {
         write_file(source / "a.txt", "alpha alpha alpha");
         write_file(source / "b.txt", "alpha");
         write_file(source / "c.txt", "filter only");
-        snowseek::index::PersistentBuildOptions build_options;
-        build_options.segment_flush_threshold_bytes = 1;
-        const auto build = snowseek::index::IndexBuilder(build_options)
-                                   .build(source, destination);
-        snowseek::test::require_equal(
-                build.temporary_segment_count, std::uint64_t{3},
-                "the ranking fixture should exercise K-way merge");
-        const snowseek::query::QueryEngine engine(destination);
+        static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
+        const snowseek::Searcher engine(destination);
 
-        snowseek::query::SearchOptions options;
+        snowseek::SearchOptions options;
         options.top_k = 2;
         options.explain = true;
         const auto ranked = engine.search("alpha", options);
@@ -205,11 +198,10 @@ void loads_top_k_snippets() {
         write_file(source / "b.txt", "unique\n");
         write_file(source / "long.txt",
                    "longtoken " + std::string(300, '.') + "\n");
-        static_cast<void>(
-                snowseek::index::IndexBuilder{}.build(source, destination));
-        const snowseek::query::QueryEngine engine(destination);
+        static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
+        const snowseek::Searcher engine(destination);
 
-        snowseek::query::SearchOptions options;
+        snowseek::SearchOptions options;
         options.source_root = source;
         options.top_k = 2;
         const auto results = engine.search("unique", options);
@@ -219,21 +211,24 @@ void loads_top_k_snippets() {
                 });
         snowseek::test::require(a != results.end(),
                                 "snippet fixture should remain in Top-K");
-        snowseek::test::require_equal(a->line, std::size_t{2},
+        snowseek::test::require(a->snippet.has_value(),
+                                "readable source should provide a snippet");
+        snowseek::test::require_equal(a->snippet->line, std::size_t{2},
                                       "snippet should report one-based line");
-        snowseek::test::require(a->snippet.find("Unicode 雪") !=
+        snowseek::test::require(a->snippet->text.find("Unicode 雪") !=
                                         std::string::npos,
                                 "snippet should retain valid UTF-8");
         const auto truncated = engine.search("longtoken", options);
-        snowseek::test::require(truncated[0].snippet.size() <= 240,
+        snowseek::test::require(truncated[0].snippet.has_value() &&
+                                        truncated[0].snippet->text.size() <=
+                                                240,
                                 "snippet should honor its byte limit");
 
         std::filesystem::remove(source / "a.txt");
         const auto stale = engine.search("term", options);
-        snowseek::test::require_equal(stale[0].line, std::size_t{0},
-                                      "missing source should retain result");
-        snowseek::test::require(stale[0].snippet.empty(),
-                                "missing source should leave snippet empty");
+        snowseek::test::require(
+                !stale[0].snippet.has_value(),
+                "missing source should retain a hit without a snippet");
 }
 
 /** @brief Verifies invalid syntax, source roots, and limits fail. */
@@ -243,20 +238,19 @@ void rejects_invalid_queries_and_options() {
         const auto destination = temporary.path() / "index";
         std::filesystem::create_directory(source);
         write_file(source / "a.txt", "one two three");
-        static_cast<void>(
-                snowseek::index::IndexBuilder{}.build(source, destination));
-        const snowseek::query::QueryEngine engine(destination);
+        static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
+        const snowseek::Searcher engine(destination);
         snowseek::test::require_throws<std::invalid_argument>(
                 [&engine] { static_cast<void>(engine.search("one two")); },
                 "implicit AND should be rejected");
-        snowseek::query::SearchOptions excessive;
-        excessive.top_k = snowseek::query::kMaxTopK + 1;
+        snowseek::SearchOptions excessive;
+        excessive.top_k = snowseek::kMaxTopK + 1;
         snowseek::test::require_throws<std::invalid_argument>(
                 [&engine, &excessive] {
                         static_cast<void>(engine.search("one", excessive));
                 },
                 "Top-K above the limit should fail");
-        snowseek::query::SearchOptions missing_source;
+        snowseek::SearchOptions missing_source;
         missing_source.source_root = temporary.path() / "missing";
         snowseek::test::require_throws<std::invalid_argument>(
                 [&engine, &missing_source] {
@@ -274,18 +268,94 @@ void publishes_partial_index_with_diagnostics() {
         write_file(source / "a-valid.txt", "safe");
         write_file(source / "b-invalid.txt", std::string(300, 'x'));
 
-        const auto report =
-                snowseek::index::IndexBuilder{}.build(source, destination);
-        snowseek::test::require_equal(report.document_errors.size(),
-                                      std::size_t{1},
+        const auto report = snowseek::IndexWriter(destination).rebuild(source);
+        snowseek::test::require_equal(report.diagnostics.size(), std::size_t{1},
                                       "oversized tokens should be diagnosed");
-        const snowseek::query::QueryEngine engine(destination);
+        snowseek::test::require_equal(
+                report.diagnostics[0].stage,
+                snowseek::DiagnosticStage::document,
+                "parse failures should retain their diagnostic stage");
+        const snowseek::Searcher engine(destination);
         const auto matches = engine.search("safe");
         snowseek::test::require_equal(matches.size(), std::size_t{1},
                                       "successful documents should publish");
         snowseek::test::require_equal(
                 matches[0].path, std::filesystem::path("a-valid.txt"),
                 "partial index paths should remain stable");
+}
+
+/** @brief Verifies queries and BM25 use only visible cross-Segment records. */
+void queries_incremental_segments_with_global_statistics() {
+        const TemporaryDirectory temporary;
+        const auto source = temporary.path() / "source";
+        const auto destination = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_file(source / "a.txt", "alpha beta shared");
+        write_file(source / "b.txt", "stale shared");
+        snowseek::IndexWriter writer(destination);
+        static_cast<void>(writer.rebuild(source));
+        const auto initial_stats = snowseek::validate_index(destination);
+        snowseek::test::require(initial_stats.documents == 2 &&
+                                        initial_stats.segments == 1 &&
+                                        initial_stats.tombstones == 0,
+                                "a full build should report one live Segment");
+
+        write_file(source / "b.txt", "alpha beta replacement");
+        write_file(source / "c.txt", "gamma shared");
+        static_cast<void>(writer.update(source));
+        const auto incremental_stats = snowseek::validate_index(destination);
+        snowseek::test::require(
+                incremental_stats.documents == 3 &&
+                        incremental_stats.segments == 2 &&
+                        incremental_stats.tombstones == 0,
+                "an update should report logical documents across Segments");
+        snowseek::SearchOptions explained;
+        explained.explain = true;
+        const snowseek::Searcher incremental(destination);
+        const auto phrase = incremental.search("\"alpha beta\"");
+        const auto shared = incremental.search("shared", explained);
+        snowseek::test::require(
+                phrase.size() == 2 && shared.size() == 2 &&
+                        shared[0].explanation[0].document_frequency == 2 &&
+                        shared[1].explanation[0].document_frequency == 2,
+                "phrase and BM25 document frequency should span visible "
+                "Segments");
+
+        const std::vector<std::string> patterns{"a.txt"};
+        static_cast<void>(writer.remove(patterns));
+        const auto removed_stats = snowseek::validate_index(destination);
+        snowseek::test::require(
+                removed_stats.documents == 2 && removed_stats.segments == 3 &&
+                        removed_stats.tombstones == 1,
+                "removal statistics should separate live and physical data");
+        const snowseek::Searcher after_remove(destination);
+        const auto remaining_phrase = after_remove.search("\"alpha beta\"");
+        const auto remaining_shared = after_remove.search("shared", explained);
+        snowseek::test::require(
+                remaining_phrase.size() == 1 &&
+                        remaining_phrase[0].path ==
+                                std::filesystem::path("b.txt") &&
+                        remaining_shared.size() == 1 &&
+                        remaining_shared[0].path ==
+                                std::filesystem::path("c.txt") &&
+                        remaining_shared[0].explanation[0].document_frequency ==
+                                1,
+                "overridden and Tombstone records must not affect queries");
+
+        const auto score_before = remaining_shared[0].score;
+        static_cast<void>(writer.compact());
+        const auto compacted_stats = snowseek::validate_index(destination);
+        snowseek::test::require(compacted_stats.documents == 2 &&
+                                        compacted_stats.segments == 1 &&
+                                        compacted_stats.tombstones == 0,
+                                "compaction should remove physical Tombstones");
+        const snowseek::Searcher after_compact(destination);
+        const auto compacted = after_compact.search("shared", explained);
+        snowseek::test::require(
+                compacted.size() == 1 &&
+                        std::abs(compacted[0].score - score_before) < 0.0000001,
+                "compaction should preserve BM25 results and explanation "
+                "inputs");
 }
 
 } // namespace
@@ -303,5 +373,7 @@ int main() {
                  rejects_invalid_queries_and_options},
                 {"publishes partial index with diagnostics",
                  publishes_partial_index_with_diagnostics},
+                {"queries incremental Segments with global statistics",
+                 queries_incremental_segments_with_global_statistics},
         });
 }

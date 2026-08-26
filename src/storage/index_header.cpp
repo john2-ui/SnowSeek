@@ -1,7 +1,7 @@
-#include "snowseek/storage/index_header.hpp"
+#include "storage/index_header.hpp"
 
-#include "snowseek/storage/binary_codec.hpp"
-#include "snowseek/storage/checksum.hpp"
+#include "storage/binary_codec.hpp"
+#include "storage/checksum.hpp"
 
 #include <array>
 #include <cstddef>
@@ -25,9 +25,13 @@ static_assert(32 + kIndexSectionCount * kSerializedSectionDescriptorSize ==
  * @brief Validates semantic and range invariants represented by IndexHeader.
  * @param header Header to validate before writing or after decoding.
  * @throws std::runtime_error If a version, flag, section, or boundary is not
- * valid for the v1 packed Segment layout.
+ * valid for the packed Segment layout.
  */
 void validate_header(const IndexHeader &header) {
+        if (header.version == kLegacyIndexFormatVersion) {
+                throw std::runtime_error(
+                        "Segment v1 is no longer supported; rebuild the index");
+        }
         if (header.version != kIndexFormatVersion) {
                 throw std::runtime_error("unsupported index format version");
         }
@@ -73,7 +77,7 @@ void validate_header(const IndexHeader &header) {
 }
 
 /**
- * @brief Serializes the checksummed 192-byte prefix of a v1 header.
+ * @brief Serializes the checksummed 192-byte Segment header prefix.
  * @param header Validated header whose fixed fields are encoded.
  * @return Exactly 192 bytes ending with the fifth section descriptor.
  * @throws std::runtime_error If an in-memory stream write fails.

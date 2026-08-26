@@ -1,6 +1,7 @@
 #pragma once
 
-#include "snowseek/storage/index_manifest.hpp"
+#include "storage/index_file.hpp"
+#include "storage/index_manifest.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -29,6 +30,67 @@ struct PublicationDiagnostic {
         std::string message;
 };
 
+/** @brief Owns one POSIX file descriptor and closes it at scope exit. */
+class UniqueFd {
+      public:
+        /**
+         * @brief Takes ownership of a descriptor.
+         * @param fd Descriptor to own, or -1 for no descriptor.
+         */
+        explicit UniqueFd(int fd = -1) noexcept;
+
+        /** @brief Closes the owned descriptor, ignoring close errors. */
+        ~UniqueFd();
+
+        /**
+         * @brief Transfers descriptor ownership from another wrapper.
+         * @param other Wrapper to empty.
+         */
+        UniqueFd(UniqueFd &&other) noexcept;
+
+        /**
+         * @brief Replaces the descriptor with one transferred from another.
+         * @param other Wrapper to empty.
+         * @return This wrapper.
+         */
+        UniqueFd &operator=(UniqueFd &&other) noexcept;
+
+        UniqueFd(const UniqueFd &) = delete;
+        UniqueFd &operator=(const UniqueFd &) = delete;
+
+        /** @brief Returns the owned descriptor, or -1 when empty. */
+        [[nodiscard]] int get() const noexcept;
+
+        /**
+         * @brief Closes the descriptor and reports a delayed close failure.
+         * @param path Path named in an error diagnostic.
+         * @throws std::runtime_error If close fails.
+         */
+        void close_checked(const std::filesystem::path &path);
+
+      private:
+        int fd_{-1};
+};
+
+/**
+ * @brief Resolves newest path records across ordered loaded Segments.
+ * @param segments Segment contents consumed in increasing persistent ID order.
+ * @return One contiguous live document table and merged inverted index.
+ * @throws std::runtime_error If Segment capabilities are inconsistent.
+ */
+[[nodiscard]] LoadedIndex
+combine_loaded_indexes(std::vector<LoadedSegment> segments);
+
+/**
+ * @brief Applies one loaded delta Segment to a resolved logical baseline.
+ * @param base Visible directory state consumed as the older logical baseline.
+ * @param delta Newest Segment consumed after overriding matching paths in base.
+ * @return Resolved logical contents and combined physical statistics.
+ * @throws std::runtime_error If position capabilities are inconsistent.
+ */
+[[nodiscard]] LoadedIndex
+combine_loaded_index_with_segment(LoadedIndex base, LoadedSegment delta);
+
 /**
  * @brief Holds the directory writer lock and owns recovery/publication state.
  *
@@ -47,6 +109,9 @@ class IndexDirectoryTransaction {
 
         [[nodiscard]] SegmentId segment_id() const noexcept;
         [[nodiscard]] std::uint64_t generation() const noexcept;
+        [[nodiscard]] std::uint64_t current_generation() const noexcept;
+        [[nodiscard]] const std::vector<SegmentId> &
+        active_segments() const noexcept;
         [[nodiscard]] std::filesystem::path segment_path() const;
 
         /**
@@ -62,10 +127,11 @@ class IndexDirectoryTransaction {
 
       private:
         std::filesystem::path directory_;
-        std::filesystem::path old_segment_;
-        int directory_fd_{-1};
+        std::vector<SegmentId> active_segments_;
+        UniqueFd directory_fd_;
         SegmentId segment_id_{};
         std::uint64_t generation_{};
+        std::uint64_t current_generation_{};
 };
 
 } // namespace snowseek::storage::detail

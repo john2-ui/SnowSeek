@@ -1,11 +1,11 @@
 #pragma once
 
-#include "snowseek/analysis/tokenizer.hpp"
-#include "snowseek/document/document_store.hpp"
-#include "snowseek/document/text_reader.hpp"
-#include "snowseek/filesystem/scanner.hpp"
-#include "snowseek/index/index.hpp"
-#include "snowseek/storage/index_manifest.hpp"
+#include "analysis/tokenizer.hpp"
+#include "document/document_store.hpp"
+#include "document/text_reader.hpp"
+#include "filesystem/scanner.hpp"
+#include "index/index.hpp"
+#include "storage/index_manifest.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -102,10 +102,20 @@ struct PersistentBuildResult {
         std::filesystem::path index_file;
         storage::SegmentId segment_id{};
         std::uint64_t manifest_generation{};
+        bool published{};
+        bool compacted{};
+        std::uint64_t active_segment_count{};
+        std::uint64_t added_files{};
+        std::uint64_t modified_files{};
+        std::uint64_t removed_files{};
+        std::uint64_t unchanged_files{};
+        std::uint64_t matched_files{};
+        std::uint64_t discarded_records{};
         InMemoryBuildStats stats;
         std::vector<filesystem::ScanError> scan_errors;
         std::vector<BuildError> document_errors;
         std::vector<BuildError> cleanup_errors;
+        std::vector<BuildError> maintenance_errors;
         std::uint64_t temporary_segment_count{};
         std::uint64_t temporary_peak_bytes{};
         std::uint64_t merge_pass_count{};
@@ -158,6 +168,40 @@ class IndexBuilder {
         [[nodiscard]] PersistentBuildResult
         build(const std::filesystem::path &source,
               const std::filesystem::path &index_directory) const;
+
+        /**
+         * @brief Synchronizes an existing index with one source tree.
+         * @param source Existing source root scanned for live documents.
+         * @param index_directory Existing Manifest or legacy index directory.
+         * @return Publication statistics, or a no-op result when unchanged.
+         * @throws std::runtime_error If scanning, fingerprinting, parsing, or
+         * publication fails; the prior generation remains selected.
+         */
+        [[nodiscard]] PersistentBuildResult
+        update(const std::filesystem::path &source,
+               const std::filesystem::path &index_directory) const;
+
+        /**
+         * @brief Publishes Tombstones for live paths matching POSIX Globs.
+         * @param index_directory Existing index directory to mutate.
+         * @param glob_patterns Nonempty case-sensitive fnmatch patterns.
+         * @return Publication statistics, or a no-op result when unmatched.
+         * @throws std::invalid_argument If no pattern is supplied.
+         * @throws std::runtime_error If validation or publication fails.
+         */
+        [[nodiscard]] PersistentBuildResult
+        remove(const std::filesystem::path &index_directory,
+               const std::vector<std::string> &glob_patterns) const;
+
+        /**
+         * @brief Rewrites all visible records into one canonical Segment.
+         * @param index_directory Existing index directory to compact.
+         * @return Publication statistics, or a no-op result when canonical.
+         * @throws std::runtime_error If validation, budgets, or publication
+         * fail; the prior generation remains selected.
+         */
+        [[nodiscard]] PersistentBuildResult
+        compact(const std::filesystem::path &index_directory) const;
 
       private:
         PersistentBuildOptions options_;

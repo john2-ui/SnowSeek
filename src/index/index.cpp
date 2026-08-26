@@ -1,6 +1,6 @@
-#include "snowseek/index/index.hpp"
+#include "index/index.hpp"
 
-#include "snowseek/common/checked_arithmetic.hpp"
+#include "common/checked_arithmetic.hpp"
 
 #include <algorithm>
 #include <functional>

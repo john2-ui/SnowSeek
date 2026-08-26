@@ -1,4 +1,4 @@
-#include "snowseek/storage/binary_codec.hpp"
+#include "storage/binary_codec.hpp"
 
 #include <cstdint>
 #include <istream>

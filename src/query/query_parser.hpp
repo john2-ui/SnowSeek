@@ -30,7 +30,7 @@ struct QueryNode {
 };
 
 /**
- * @brief Parses and normalizes one M3 query expression.
+ * @brief Parses and normalizes one query expression.
  * @param expression Boolean expression containing terms, phrases, or filters.
  * @return Owning syntax tree with normalized term and phrase tokens.
  * @throws std::invalid_argument If syntax, filter values, length, or nesting

@@ -1,5 +1,5 @@
-#include "snowseek/storage/checksum.hpp"
-#include "snowseek/storage/index_manifest.hpp"
+#include "storage/checksum.hpp"
+#include "storage/index_manifest.hpp"
 
 #include "test_support.hpp"
 
@@ -78,6 +78,18 @@ void round_trips_deterministically() {
                 snowseek::storage::segment_file_name(42),
                 std::string("segment-0000000000000042.idx"),
                 "Segment filename should use sixteen decimal digits");
+
+        const snowseek::storage::IndexManifest multiple{8, 45, {1, 17, 44}};
+        const auto multiple_bytes =
+                snowseek::storage::encode_manifest(multiple);
+        const auto multiple_actual =
+                snowseek::storage::decode_manifest(multiple_bytes);
+        snowseek::test::require_equal(
+                multiple_bytes.size(), std::size_t{88},
+                "three-Segment Manifest should contain 64+3*8 bytes");
+        snowseek::test::require_equal(
+                multiple_actual.active_segments, multiple.active_segments,
+                "ordered active SegmentIds should round-trip");
 }
 
 /** @brief Verifies identity, sizing, truncation, and reserved fields. */
@@ -104,9 +116,9 @@ void rejects_invalid_structure() {
         refresh_header_checksum(bytes);
         require_rejected(bytes, "unknown header size should fail");
         bytes = valid;
-        set_u32(bytes, 20, 2);
+        set_u32(bytes, 20, 0);
         refresh_header_checksum(bytes);
-        require_rejected(bytes, "multiple active Segments should fail in v1");
+        require_rejected(bytes, "an empty active Segment list should fail");
         bytes = valid;
         set_u64(bytes, 40, 16);
         refresh_header_checksum(bytes);
@@ -146,9 +158,15 @@ void rejects_invalid_semantics() {
         snowseek::test::require_throws<std::runtime_error>(
                 [] {
                         static_cast<void>(snowseek::storage::encode_manifest(
-                                {1, 3, {1, 2}}));
+                                {1, 4, {2, 1}}));
                 },
-                "encoder should reject multiple active Segments");
+                "encoder should reject decreasing active SegmentIds");
+        snowseek::test::require_throws<std::runtime_error>(
+                [] {
+                        static_cast<void>(snowseek::storage::encode_manifest(
+                                {1, 4, {1, 1}}));
+                },
+                "encoder should reject duplicate active SegmentIds");
         snowseek::test::require_throws<std::invalid_argument>(
                 [] {
                         static_cast<void>(

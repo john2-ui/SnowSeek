@@ -1,11 +1,13 @@
-#include "snowseek/storage/index_file.hpp"
+#include "storage/index_file.hpp"
 
-#include "snowseek/common/checked_arithmetic.hpp"
-#include "snowseek/storage/binary_codec.hpp"
-#include "snowseek/storage/checksum.hpp"
-#include "snowseek/storage/index_header.hpp"
+#include "common/checked_arithmetic.hpp"
+#include "storage/binary_codec.hpp"
+#include "storage/checksum.hpp"
+#include "storage/index_header.hpp"
 #include "storage/index_file_internal.hpp"
+#include "storage/segment_format_internal.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <fstream>
@@ -19,22 +21,18 @@
 namespace snowseek::storage {
 namespace {
 
-constexpr std::uint64_t kTermRecordSize = 32;
-constexpr std::uint64_t kPostingRecordSize = 16;
-
-struct TermRecord {
-        std::uint64_t term_offset{};
-        std::uint32_t term_length{};
-        std::uint32_t document_frequency{};
-        std::uint64_t posting_offset{};
-        std::uint64_t posting_length{};
-};
-
 using common::detail::checked_add;
 using common::detail::checked_multiply;
 
 /** @brief Encodes one path as portable generic UTF-8 bytes. */
 [[nodiscard]] std::string path_to_utf8(const std::filesystem::path &path) {
+        if (path.empty() || path.is_absolute() ||
+            std::any_of(path.begin(), path.end(), [](const auto &component) {
+                    return component == "." || component == "..";
+            })) {
+                throw std::runtime_error(
+                        "document path must be a normalized relative path");
+        }
         const auto encoded = path.generic_u8string();
         std::string bytes(reinterpret_cast<const char *>(encoded.data()),
                           encoded.size());
@@ -51,7 +49,7 @@ template <typename Destination, typename Source>
         if (value >
             static_cast<Source>(std::numeric_limits<Destination>::max())) {
                 throw std::runtime_error(std::string(field) +
-                                         " exceeds the v1 format limit");
+                                         " exceeds the Segment format limit");
         }
         return static_cast<Destination>(value);
 }
@@ -73,7 +71,7 @@ template <typename Destination, typename Source>
 
 } // namespace
 
-IndexFileStats
+SegmentStats
 detail::write_index_file_bounded(const std::filesystem::path &path,
                                  const document::DocumentStore &documents,
                                  const index::InMemoryIndex &index,
@@ -83,18 +81,38 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
         std::ostringstream documents_stream(std::ios::out | std::ios::binary);
         write_u64_le(documents_stream, documents.size());
         std::uint64_t path_offset = 0;
+        std::uint64_t live_document_count = 0;
+        std::uint64_t tombstone_count = 0;
         for (const auto &document : documents.all()) {
                 const std::string path_bytes = path_to_utf8(document.path);
                 const auto path_length = checked_narrow<std::uint32_t>(
                         path_bytes.size(), "path length");
-                write_u32_le(documents_stream, document.id);
-                write_u32_le(documents_stream, path_length);
-                write_u64_le(documents_stream, path_offset);
-                write_u64_le(documents_stream, document.file_size);
-                write_u64_le(documents_stream,
-                             timestamp_bits(document.modified_time_ns));
-                write_u32_le(documents_stream, document.token_count);
-                write_u32_le(documents_stream, 0);
+                std::uint32_t flags = 0;
+                std::uint32_t content_crc32c = 0;
+                if (document.state == document::DocumentState::tombstone) {
+                        if (document.file_size != 0 ||
+                            document.modified_time_ns != 0 ||
+                            document.token_count != 0 ||
+                            document.content_crc32c.has_value()) {
+                                throw std::runtime_error(
+                                        "Tombstone contains live document metadata");
+                        }
+                        flags = detail::kDocumentTombstone;
+                        ++tombstone_count;
+                } else {
+                        ++live_document_count;
+                        if (document.content_crc32c.has_value()) {
+                                flags |= detail::kDocumentContentCrc32c;
+                                content_crc32c = *document.content_crc32c;
+                        }
+                }
+                detail::write_document_record(
+                        documents_stream,
+                        detail::DocumentRecord{
+                                document.id, path_length, path_offset,
+                                document.file_size,
+                                timestamp_bits(document.modified_time_ns),
+                                document.token_count, flags, content_crc32c, 0});
                 paths_stream.write(path_bytes.data(), path_bytes.size());
                 path_offset = checked_add(path_offset, path_bytes.size(),
                                           "paths section length");
@@ -105,7 +123,7 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
         const auto terms = index.sorted_terms();
         std::ostringstream postings_stream(std::ios::out | std::ios::binary);
         std::ostringstream positions_stream(std::ios::out | std::ios::binary);
-        std::vector<TermRecord> term_records;
+        std::vector<detail::TermRecord> term_records;
         term_records.reserve(terms.size());
         std::uint64_t posting_offset = 0;
         std::uint64_t position_offset = 0;
@@ -120,14 +138,21 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                 const auto document_frequency = checked_narrow<std::uint32_t>(
                         postings->size(), "document frequency");
                 const auto posting_length =
-                        checked_multiply(postings->size(), kPostingRecordSize,
+                        checked_multiply(postings->size(),
+                                         detail::kPostingRecordSize,
                                          "term posting length");
-                term_records.push_back(TermRecord{
+                term_records.push_back(detail::TermRecord{
                         0,
                         checked_narrow<std::uint32_t>(term.size(),
                                                       "term length"),
                         document_frequency, posting_offset, posting_length});
                 for (const auto &posting : *postings) {
+                        if (posting.document_id >= documents.size() ||
+                            documents.get(posting.document_id).state ==
+                                    document::DocumentState::tombstone) {
+                                throw std::runtime_error(
+                                        "posting references a missing or Tombstone document");
+                        }
                         const auto frequency = posting.term_frequency();
                         if (frequency == 0 ||
                             (index.stores_positions() &&
@@ -138,9 +163,11 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                                         "posting frequency and positions "
                                         "mismatch");
                         }
-                        write_u32_le(postings_stream, posting.document_id);
-                        write_u32_le(postings_stream, frequency);
-                        write_u64_le(postings_stream, position_offset);
+                        detail::write_posting_record(
+                                postings_stream,
+                                detail::PostingRecord{posting.document_id,
+                                                      frequency,
+                                                      position_offset});
                         if (index.stores_positions()) {
                                 for (const auto position : posting.positions) {
                                         write_u32_le(positions_stream,
@@ -149,7 +176,8 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                                 position_offset = checked_add(
                                         position_offset,
                                         checked_multiply(
-                                                frequency, 4,
+                                                frequency,
+                                                detail::kPositionRecordSize,
                                                 "position byte length"),
                                         "positions section length");
                                 position_count =
@@ -168,18 +196,15 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
         write_u64_le(terms_stream, terms.size());
         std::uint64_t term_offset =
                 checked_add(8,
-                            checked_multiply(terms.size(), kTermRecordSize,
+                            checked_multiply(terms.size(),
+                                             detail::kTermRecordSize,
                                              "term table length"),
                             "term byte offset");
         for (std::size_t index_value = 0; index_value < terms.size();
              ++index_value) {
                 auto &record = term_records[index_value];
                 record.term_offset = term_offset;
-                write_u64_le(terms_stream, record.term_offset);
-                write_u32_le(terms_stream, record.term_length);
-                write_u32_le(terms_stream, record.document_frequency);
-                write_u64_le(terms_stream, record.posting_offset);
-                write_u64_le(terms_stream, record.posting_length);
+                detail::write_term_record(terms_stream, record);
                 term_offset =
                         checked_add(term_offset, terms[index_value].size(),
                                     "terms section length");
@@ -197,7 +222,8 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
         std::uint64_t offset = kIndexHeaderSize;
         for (std::size_t section_index = 0; section_index < sections.size();
              ++section_index) {
-                auto &descriptor = header.sections[section_index];
+                auto &descriptor = detail::section(
+                        header, kIndexSectionOrder[section_index]);
                 descriptor.offset = offset;
                 descriptor.length = sections[section_index].size();
                 descriptor.checksum = crc32c(sections[section_index]);
@@ -239,13 +265,20 @@ detail::write_index_file_bounded(const std::filesystem::path &path,
                 throw std::runtime_error("failed to write index file: " +
                                          path.string());
         }
-        return IndexFileStats{header.file_size, documents.size(), terms.size(),
-                              posting_count, position_count};
+        return SegmentStats{
+                .file_size = header.file_size,
+                .physical_document_count = documents.size(),
+                .live_document_count = live_document_count,
+                .tombstone_count = tombstone_count,
+                .term_count = terms.size(),
+                .posting_count = posting_count,
+                .position_count = position_count,
+        };
 }
 
-IndexFileStats write_index_file(const std::filesystem::path &path,
-                                const document::DocumentStore &documents,
-                                const index::InMemoryIndex &index) {
+SegmentStats write_index_file(const std::filesystem::path &path,
+                              const document::DocumentStore &documents,
+                              const index::InMemoryIndex &index) {
         return detail::write_index_file_bounded(
                 path, documents, index,
                 std::numeric_limits<std::uint64_t>::max());
