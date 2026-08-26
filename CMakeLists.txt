@@ -32,6 +32,8 @@ add_library(snowseek_core
     src/storage/checksum.cpp
     src/storage/index_header.cpp
     src/storage/index_file.cpp
+    src/storage/index_manifest.cpp
+    src/storage/index_directory.cpp
     src/storage/segment_merge.cpp
     src/storage/index_validation.cpp
 )

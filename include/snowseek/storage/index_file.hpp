@@ -57,4 +57,23 @@ write_index_file(const std::filesystem::path &path,
 [[nodiscard]] IndexFileStats
 validate_index_file(const std::filesystem::path &path);
 
+/**
+ * @brief Loads the active Segment selected by an index directory.
+ * @param directory Directory containing MANIFEST or a legacy M4 Segment.
+ * @return Loaded active index data and statistics.
+ * @throws std::runtime_error If MANIFEST or its Segment is invalid; a missing
+ * MANIFEST falls back only to the fixed legacy Segment filename.
+ */
+[[nodiscard]] LoadedIndex
+read_index_directory(const std::filesystem::path &directory);
+
+/**
+ * @brief Validates the active Segment selected by an index directory.
+ * @param directory Directory containing MANIFEST or a legacy M4 Segment.
+ * @return Statistics for the validated active Segment.
+ * @throws std::runtime_error If directory metadata or Segment data is invalid.
+ */
+[[nodiscard]] IndexFileStats
+validate_index_directory(const std::filesystem::path &directory);
+
 } // namespace snowseek::storage

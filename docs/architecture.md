@@ -10,7 +10,8 @@ CLI ──┬── IndexBuilder ── Scanner + Tokenizer ── Segment/Stora
                                                    └───────── Source snippets
 ```
 
-当前磁盘索引由单个不可变 Segment 构成；Manifest 和多 Segment 发布入口留到 M5。
+当前磁盘索引仍只激活一个不可变 Segment，但由 Manifest 选择活动 SegmentId；多
+Segment 查询、Tombstone 和增量命令留给 M5 后续切片。
 所有跨平台磁盘数据使用固定宽度整数和显式字节序。首版 Segment 的精确布局和
 兼容性规则见 [index-format.md](index-format.md)。
 
@@ -50,7 +51,7 @@ M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算�
 记录、term 字节、Postings 和 Positions spool，再用固定缓冲拼装最终 v1 文件并增量
 计算 CRC32C。构建器默认每组最多归并 16 个 Segment；输入更多时按文档顺序逐层
 生成中间 Segment，每组输出通过流式校验后才删除对应输入，最终候选通过相同校验后
-才替换稳定文件。查询加载格式没有变化。
+才交给目录发布事务。Segment 内部格式没有变化。
 
 私有工作区按逻辑文件长度记录初始 Segment、中间 Segment、spool 和候选文件。调用方
 可设置临时空间硬预算；普通 Segment 在编码完成、打开输出前做精确大小检查，归并按
@@ -68,3 +69,15 @@ writer 序列化缓冲，独立的 `memory_peak_bytes` 用于验证成功构建�
 Minimal 档位关闭 Position：Posting 仍保存词频，v1 feature flag 清零、Positions 区
 为空且 offset 为零。加载、验证和归并均保留该能力位；词项、布尔和 BM25 查询继续
 工作，短语查询因缺少位置数据而明确拒绝。
+
+M5 首个切片在索引目录上增加独占 `flock`。writer 持锁完成残留清理、构建和发布；
+恢复只识别 `.snowseek-build-*`、`.snowseek-manifest-*` 和严格合法的 Segment 文件名，
+未知文件保持不动。残留 Segment 的最大 ID 也参与下一 ID 计算，因此崩溃不会导致
+标识符复用。
+
+发布先完整验证并 `fsync` 候选，再 rename 为新 Segment 并同步目录。随后写入、同步
+且重读验证一个同目录 Manifest 临时文件，原子 rename 为 `MANIFEST` 并再次同步目录；
+Manifest rename 是可见 generation 的切换点。只有新 Manifest 的目录项持久化成功后
+才删除旧 Segment。提交前失败保留旧 generation，提交后清理失败记录诊断并由下一次
+writer 恢复。无锁 reader 若正好跨越提交，会重试尚未打开的旧路径；已打开的旧文件
+即使被 unlink 仍保持完整，因此查询只得到完整旧 generation 或完整新 generation。

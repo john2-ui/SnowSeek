@@ -101,6 +101,7 @@ void runs_index_query_stats_and_verify() {
                                       "index command should succeed");
         for (const char *key :
              {"memory_metadata_bytes=", "memory_reader_peak_bytes=",
+              "segment_id=1", "manifest_generation=1",
               "memory_token_peak_bytes=", "memory_dictionary_bytes=",
               "memory_posting_bytes=", "memory_estimated_peak_bytes=",
               "resource_profile=balanced",
@@ -130,6 +131,25 @@ void runs_index_query_stats_and_verify() {
         snowseek::test::require_equal(
                 invoke({"snowseek", "verify", destination.string()}), 0,
                 "verify command should succeed");
+
+        write_file(source / "a.txt", "replacement");
+        const auto rebuilt =
+                invoke_captured({"snowseek", "index", source.string(),
+                                 "--index", destination.string()});
+        snowseek::test::require(
+                rebuilt.status == 0 &&
+                        rebuilt.output.find("segment_id=2") !=
+                                std::string::npos &&
+                        rebuilt.output.find("manifest_generation=2") !=
+                                std::string::npos,
+                "a repeated CLI build should publish the next generation");
+        snowseek::test::require(
+                !std::filesystem::exists(destination /
+                                         snowseek::storage::kSegmentFileName),
+                "the second generation should clean the old ID 1 Segment");
+        snowseek::test::require_equal(
+                invoke({"snowseek", "stats", destination.string()}), 0,
+                "stats should resolve the Manifest-selected Segment");
 }
 
 /** @brief Verifies index resource options and IEC size parsing. */

@@ -464,7 +464,14 @@ int run_index(const std::filesystem::path &source,
                 std::cerr << "document warning: " << error.path << ": "
                           << error.message << '\n';
         }
+        for (const auto &error : result.cleanup_errors) {
+                std::cerr << "cleanup warning: " << error.path << ": "
+                          << error.message << '\n';
+        }
         std::cout << "index=" << result.index_file.string() << '\n'
+                  << "segment_id=" << result.segment_id << '\n'
+                  << "manifest_generation=" << result.manifest_generation
+                  << '\n'
                   << "resource_profile="
                   << resource_profile_name(options.profile) << '\n'
                   << "scanned=" << result.stats.scanned_files << '\n'
@@ -493,8 +500,10 @@ int run_index(const std::filesystem::path &source,
                   << "temporary_peak_bytes=" << result.temporary_peak_bytes
                   << '\n'
                   << "merge_pass_count=" << result.merge_pass_count << '\n';
-        return result.scan_errors.empty() && result.document_errors.empty() ? 0
-                                                                            : 2;
+        return result.scan_errors.empty() && result.document_errors.empty() &&
+                               result.cleanup_errors.empty()
+                       ? 0
+                       : 2;
 }
 
 /**
@@ -529,8 +538,7 @@ int run_query(const std::filesystem::path &index_directory,
  * @return Zero after successful validation and output.
  */
 int run_stats(const std::filesystem::path &index_directory) {
-        const auto stats = storage::validate_index_file(
-                index_directory / storage::kSegmentFileName);
+        const auto stats = storage::validate_index_directory(index_directory);
         std::cout << "documents=" << stats.document_count << '\n'
                   << "terms=" << stats.term_count << '\n'
                   << "postings=" << stats.posting_count << '\n'
@@ -545,8 +553,7 @@ int run_stats(const std::filesystem::path &index_directory) {
  * @return Zero when every structural and checksum invariant holds.
  */
 int run_verify(const std::filesystem::path &index_directory) {
-        static_cast<void>(storage::validate_index_file(
-                index_directory / storage::kSegmentFileName));
+        static_cast<void>(storage::validate_index_directory(index_directory));
         std::cout << "index verified\n";
         return 0;
 }

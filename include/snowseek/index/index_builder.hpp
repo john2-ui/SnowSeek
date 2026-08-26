@@ -5,6 +5,7 @@
 #include "snowseek/document/text_reader.hpp"
 #include "snowseek/filesystem/scanner.hpp"
 #include "snowseek/index/index.hpp"
+#include "snowseek/storage/index_manifest.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -99,9 +100,12 @@ class InMemoryIndexBuilder {
 
 struct PersistentBuildResult {
         std::filesystem::path index_file;
+        storage::SegmentId segment_id{};
+        std::uint64_t manifest_generation{};
         InMemoryBuildStats stats;
         std::vector<filesystem::ScanError> scan_errors;
         std::vector<BuildError> document_errors;
+        std::vector<BuildError> cleanup_errors;
         std::uint64_t temporary_segment_count{};
         std::uint64_t temporary_peak_bytes{};
         std::uint64_t merge_pass_count{};

@@ -2,6 +2,8 @@
 
 #include "snowseek/common/checked_arithmetic.hpp"
 #include "snowseek/storage/index_file.hpp"
+#include "snowseek/storage/index_manifest.hpp"
+#include "storage/index_directory_internal.hpp"
 #include "storage/index_file_internal.hpp"
 #include "storage/segment_merge.hpp"
 
@@ -837,17 +839,20 @@ IndexBuilder::build(const std::filesystem::path &source,
                                          source.string());
         }
 
+        std::filesystem::create_directories(index_directory);
+        storage::detail::IndexDirectoryTransaction publication(index_directory);
         const auto canonical_source = std::filesystem::weakly_canonical(source);
         const filesystem::Scanner scanner(
                 options_.in_memory_options.scan_options);
         auto scan_result = scanner.scan(canonical_source);
-        std::filesystem::create_directories(index_directory);
         BuildWorkspace workspace(index_directory,
                                  options_.temporary_space_budget_bytes);
         BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
         MemoryReservation metadata_memory(memory_budget);
         MemoryReservation active_batch_memory(memory_budget);
         PersistentBuildResult result;
+        result.segment_id = publication.segment_id();
+        result.manifest_generation = publication.generation();
         result.stats.scanned_files = scan_result.files.size();
         result.scan_errors = std::move(scan_result.errors);
         result.worker_thread_count = options_.worker_thread_count;
@@ -1050,7 +1055,6 @@ IndexBuilder::build(const std::filesystem::path &source,
         const auto segment_source_bytes =
                 estimated_segment_source_bytes(segments);
 
-        const auto index_file = index_directory / storage::kSegmentFileName;
         const auto candidate = workspace.path() / "candidate.idx";
         std::uint64_t merge_memory = 0;
         if (segments.empty()) {
@@ -1060,10 +1064,8 @@ IndexBuilder::build(const std::filesystem::path &source,
                                 options_.in_memory_options.store_positions),
                         workspace.remaining_bytes());
                 workspace.add_file(stats.file_size);
-                static_cast<void>(storage::validate_index_file(candidate));
         } else if (segments.size() == 1) {
                 std::filesystem::rename(segments.front().path, candidate);
-                static_cast<void>(storage::validate_index_file(candidate));
         } else {
                 MemoryReservation merge_reservation(memory_budget);
                 merge_memory = storage::detail::estimate_segment_merge_memory(
@@ -1073,9 +1075,6 @@ IndexBuilder::build(const std::filesystem::path &source,
                         merge_segment_levels(candidate, std::move(segments),
                                              options_.merge_fan_in, workspace);
         }
-        result.temporary_peak_bytes = workspace.peak_bytes();
-        result.memory_peak_bytes = memory_budget.peak_bytes();
-
         auto metadata = estimated_path_list_bytes(scan_result.files);
         metadata = checked_add(metadata,
                                estimated_scan_error_bytes(result.scan_errors),
@@ -1090,15 +1089,33 @@ IndexBuilder::build(const std::filesystem::path &source,
                 "metadata memory");
         update_estimated_peak(result.stats.memory);
 
-        // Publish only the fully validated candidate; the workspace owns every
-        // other artifact and removes it on both success and failure.
-        std::error_code rename_error;
-        std::filesystem::rename(candidate, index_file, rename_error);
-        if (rename_error) {
-                throw std::runtime_error("failed to publish index file: " +
-                                         rename_error.message());
+        // Charge and preflight the complete Manifest before opening its
+        // temporary output. The candidate is validated again at the durable
+        // publication boundary.
+        static_cast<void>(storage::validate_index_file(candidate));
+        constexpr std::uint64_t manifest_size =
+                storage::kManifestHeaderSize + sizeof(storage::SegmentId);
+        MemoryReservation manifest_memory(memory_budget);
+        manifest_memory.resize(manifest_size);
+        const storage::IndexManifest manifest{
+                publication.generation(), publication.segment_id() + 1,
+                {publication.segment_id()}};
+        const auto manifest_bytes = storage::encode_manifest(manifest);
+        if (manifest_bytes.size() != manifest_size) {
+                throw std::logic_error("unexpected single-Segment Manifest size");
         }
-        result.index_file = index_file;
+        workspace.require_additional(manifest_size);
+        workspace.note_transient_peak(manifest_size);
+
+        const auto cleanup = publication.publish(candidate, manifest_bytes);
+        result.cleanup_errors.reserve(cleanup.size());
+        for (const auto &diagnostic : cleanup) {
+                result.cleanup_errors.push_back(
+                        BuildError{diagnostic.path, diagnostic.message});
+        }
+        result.index_file = publication.segment_path();
+        result.temporary_peak_bytes = workspace.peak_bytes();
+        result.memory_peak_bytes = memory_budget.peak_bytes();
         return result;
 }
 

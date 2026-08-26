@@ -2,9 +2,11 @@
 
 ## 1. Scope
 
-Version 1 stores one immutable Segment at
-`<index-directory>/segment-0000000000000001.idx`. A later Manifest may publish
-multiple Segment files, but it does not change the bytes defined here. The
+Version 1 stores one immutable Segment selected by the directory's
+[`MANIFEST`](manifest-format.md). Segment filenames derive from monotonic IDs,
+for example `<index-directory>/segment-0000000000000001.idx`. Manifest-free M4
+directories use that exact filename as a legacy fallback. The directory layer
+does not change the Segment bytes defined here. The
 format contains no native C++ object representations: every integer has an
 explicit width and is encoded in little-endian byte order.
 

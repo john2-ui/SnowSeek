@@ -12,7 +12,9 @@
 `getrusage(RUSAGE_SELF)` 独立读取；`rss_increment_bytes` 是构建后进程峰值与构建前
 已有峰值之差。`temporary_peak_bytes` 是私有工作区内初始 Segment、中间 Segment、
 spool 和候选文件同时存在时的逻辑长度峰值，不等同于文件系统已分配块数。
-`memory_peak_bytes` 是线程安全预算账本实际接受过的最大并发分类 reservation；它不
+Manifest 临时文件也计入 `temporary_peak_bytes`，但已提交的正式 Segment 和
+Manifest 不计入构建预算。`memory_peak_bytes` 是线程安全预算账本实际接受过的最大
+并发分类 reservation，包含 72-byte 单 Segment Manifest 编码缓冲；它不
 统计 allocator、线程栈、运行库、内核页和 writer 序列化缓冲，因此不是 RSS 配额。
 
 ## 复现
@@ -120,6 +122,8 @@ cmake --build build-memory-baseline --parallel 2
 来自明确排除的线程栈、allocator 和序列化阶段等开销；Performance 同样不能把 1 GiB
 解释为进程配额。Minimal 因移除 Positions 缩小最终索引，但不再支持短语查询。
 
-结果只描述上述环境各一次测量。临时空间限制采用输入大小推导的保守预检，可能在高
+上述表格是引入 Manifest 前的历史实测，不为尚未重新测量的 M5 改动改写数值；M5 会
+使逻辑临时峰值最多增加一个 72-byte Manifest 临时文件，并新增 SegmentId 和
+generation 输出。结果只描述上述环境各一次测量。临时空间限制采用输入大小推导的保守预检，可能在高
 词项重复率下早于实际空间需求拒绝构建；这些数字不能作为跨机器性能门槛。下一步将
 补充自定义临时目录，并在 AArch64 上校准 RSS、吞吐和索引兼容性。

@@ -298,6 +298,9 @@ int run(const BenchmarkOptions &options) {
                   << "vocabulary=" << options.vocabulary << '\n'
                   << "source_bytes=" << source_bytes << '\n'
                   << "tokens=" << result.stats.token_count << '\n'
+                  << "segment_id=" << result.segment_id << '\n'
+                  << "manifest_generation=" << result.manifest_generation
+                  << '\n'
                   << "elapsed_us=" << elapsed.count() << '\n'
                   << "throughput_mib_per_second=" << std::fixed
                   << std::setprecision(3) << throughput << '\n'

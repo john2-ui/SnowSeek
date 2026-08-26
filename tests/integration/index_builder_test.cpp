@@ -509,8 +509,8 @@ void merges_multiple_levels_byte_for_byte() {
                 ++published_entries;
         }
         snowseek::test::require_equal(
-                published_entries, std::size_t{1},
-                "successful publication should clean every workspace file");
+                published_entries, std::size_t{2},
+                "publication should retain only MANIFEST and its Segment");
 }
 
 /** @brief Verifies logical memory failures preserve published output. */
@@ -551,8 +551,8 @@ void enforces_logical_memory_budget() {
                 static_cast<std::size_t>(std::distance(
                         std::filesystem::directory_iterator(destination),
                         std::filesystem::directory_iterator{})),
-                std::size_t{1},
-                "a memory failure should clean its private workspace");
+                std::size_t{2},
+                "a memory failure should retain only the published generation");
 }
 
 /** @brief Verifies positionless multi-level output remains deterministic. */
@@ -631,8 +631,8 @@ void enforces_temporary_space_budget() {
                 ++entries;
         }
         snowseek::test::require_equal(
-                entries, std::size_t{1},
-                "a budget failure should clean its private workspace");
+                entries, std::size_t{2},
+                "a budget failure should retain only the published generation");
 }
 
 /** @brief Verifies empty and one-document persistent builds. */

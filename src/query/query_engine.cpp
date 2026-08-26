@@ -635,8 +635,7 @@ struct BetterRankComparator {
 } // namespace
 
 QueryEngine::QueryEngine(const std::filesystem::path &index_directory)
-    : loaded_(storage::read_index_file(index_directory /
-                                       storage::kSegmentFileName)) {}
+    : loaded_(storage::read_index_directory(index_directory)) {}
 
 std::vector<SearchResult>
 QueryEngine::search(std::string_view expression,
