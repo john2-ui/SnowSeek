@@ -1,105 +1,146 @@
-# 架构说明
+# 项目结构与后续计划
 
-SnowSeek 按依赖方向拆分为 `filesystem/document/analysis`、`index/storage`、
-`query/ranking` 和 `cli`。CLI 只负责参数与输出；嵌入方只通过
-`snowseek/index.hpp`、`snowseek/search.hpp` 和 `snowseek/version.hpp` 使用核心能力。
-其余头文件和数据结构均属于 `src` 私有实现。
+## 项目定位
 
-```text
-CLI / embedding ──┬── IndexWriter ── Scanner + Tokenizer ── Segment/Storage
-                  └── Searcher(PImpl) ── Parser + Boolean/Phrase evaluator
-                                       └── BM25 + Top-K ── Source snippets
+SnowSeek 0.2 是面向嵌入式 Linux 的本地全文检索引擎，使用 C++20，实现完整构建、
+增量更新、删除、压缩、布尔与短语查询、BM25 排序，以及可崩溃恢复的持久化发布。
+运行时不依赖第三方库。
+
+公开 C++ 接口只有：
+
+- `snowseek/index.hpp`：`IndexWriter`、维护结果和索引校验；
+- `snowseek/search.hpp`：`Searcher`、查询选项和命中结果；
+- `snowseek/version.hpp`：版本常量。
+
+AST、Tokenizer、DocumentStore、倒排表、BM25、Segment 和 Manifest 均为
+`src` 私有实现。
+
+## 目录结构
+
+| 目录 | 职责 |
+|---|---|
+| `include/snowseek` | 稳定的 0.2 公共 C++ API |
+| `src/filesystem` | 递归扫描、过滤和确定性路径排序 |
+| `src/document` | UTF-8 流式读取与文档元数据 |
+| `src/analysis` | ASCII Token 化、归一化和位置记录 |
+| `src/index` | 完整构建、增量计划、批次提交与维护编排 |
+| `src/storage` | Segment v2、Manifest v1、校验、归并和原子发布 |
+| `src/query` | 私有查询 AST、解析和布尔/短语求值 |
+| `src/ranking` | BM25 评分 |
+| `src/cli` | 参数解析、命令分发和稳定输出 |
+| `tests` | 无第三方测试框架的单元与集成测试 |
+| `benchmarks` | 可选的确定性构建基准 |
+| `cmake/toolchains` | 嵌入式 Linux 交叉编译配置 |
+
+依赖方向保持单向：
+
+```mermaid
+flowchart LR
+    API[CLI / C++ API]
+    Writer[IndexWriter]
+    Searcher[Searcher]
+    Build[filesystem + document + analysis + index]
+    Storage[storage]
+    Query[query + ranking]
+
+    API --> Writer --> Build --> Storage
+    API --> Searcher --> Query
+    Searcher --> Storage
 ```
 
-当前磁盘索引由 Manifest 选择一个或多个不可变 Segment。Segment v2 的 Document
-记录保存可选内容 CRC32C 和 Tombstone 状态；0.2 reader 只接受 Segment v2 和
-Manifest v1。
-所有跨平台磁盘数据使用固定宽度整数和显式字节序。Segment v2 的精确布局和
-兼容性规则见 [index-format.md](index-format.md)。
+## 索引流程
 
-`document::TextReader` 使用固定大小缓冲区读取原文，并通过回调输出不跨越 UTF-8
-字符边界的文本块。非法 UTF-8 默认替换为 U+FFFD，也可使用严格模式在首个错误的
-原始字节偏移处终止。回调收到的 `string_view` 只在本次回调期间有效。
+### 完整构建
 
-`analysis::TokenizerSession` 接受连续文本块并保留跨块 Token 状态，输出从零开始且
-严格递增的 Token 位置。第一版仅索引 ASCII 字母、数字和下划线，非 ASCII 字符作为
-分隔符；单个 Token 默认限制为 256 字节。
+```mermaid
+flowchart LR
+    Scan[扫描并排序文件]
+    Parse[分波并行解析]
+    Batch[按路径顺序提交]
+    Flush[刷写临时 Segment]
+    Merge[多级归并]
+    Publish[发布 Segment 与 Manifest]
 
-`document::DocumentStore` 按加入顺序分配连续 `DocumentId` 并保存内存文档表。
-`index::InMemoryIndex` 将规范化词项映射到 Posting List；每个 Posting 内的位置严格
-递增，同一词项的 DocumentId 也严格递增，为后续线性求交和磁盘编码提供不变量。
+    Scan --> Parse --> Batch --> Flush --> Merge --> Publish
+```
 
-`index::InMemoryIndexBuilder` 连接 Scanner、TextReader、TokenizerSession、文档表与
-内存倒排索引。每个文件先完整解析到临时 Token 集合，成功后才分配 DocumentId 并
-提交 Posting，避免读取或分析失败留下半个文档。文档修改时间统一记录为 Unix Epoch
-纳秒。
+文件先完整解析，再分配 DocumentId 和提交 Posting，失败文件不会留下半成品。
+解析可以并行，提交始终按扫描顺序执行，因此线程调度不会改变最终索引字节。
 
-M2 使用不可变 Segment 持久化 Documents、Paths、Terms、Postings 和 Positions。
-Header 与每个区域分别使用 CRC32C 校验，所有整数显式使用小端编码；加载器在构造
-查询结构前验证版本、边界、顺序、计数与校验和。目录加载器先验证全部活动 Segment
-并按路径求最后状态，再只为可见 live 文档装载与重映射 Posting，因此现有查询器看到
-的是一个连续的逻辑索引。
+活动批次达到资源档位的容量阈值后，在文档边界刷写临时 Segment。输入超过
+`merge_fan_in` 时逐层归并；候选文件通过完整校验后才进入发布事务。
 
-M3 的私有查询解析器将表达式解析为有深度上限的 AST，布尔求值器对有序 DocumentId
-集合执行集合运算，短语命中额外验证连续 Position。`Searcher::search` 只编排校验、
-解析、求值、Top-K、解释和 snippet。AND 子树按估算文档
-频率从小到大求交；匹配文档按正向去重词项的 BM25 之和评分，通过固定容量堆保留
-Top-K，分数相同时按相对路径稳定排序。原文根目录不写入 Segment，调用方可显式提供
-`source_root`，引擎只为最终 Top-K 读取原文并生成 UTF-8 行片段。
+### 增量维护
 
-M4 按容器 capacity 和哈希桶数量增量维护活动索引的容量估算。持久化构建在
-`DocumentStore + dictionary + postings` 达到默认 128 MiB 后，于文档边界将当前批次
-写为私有工作区内的 v2 Segment；单个超大文档允许越过阈值一次。临时 Segment 使用
-局部 DocumentId，最终归并按批次基址重映射为全局连续 ID。
+`update` 使用文件大小、纳秒 mtime 和原始内容 CRC32C 判断新增与修改，源中消失
+的路径写入 Tombstone。`remove` 使用大小写敏感 POSIX Glob 选择可见路径。
+两者通常追加一个 delta Segment；活动 Segment 超过 16 个时尝试自动压缩。
 
-多 Segment 归并为词典建立一个最小堆游标。第一遍统计唯一词数，第二遍依次写 term
-记录、term 字节、Postings 和 Positions spool，再用固定缓冲拼装最终 v2 文件并增量
-计算 CRC32C。构建器默认每组最多归并 16 个 Segment；输入更多时按文档顺序逐层
-生成中间 Segment，每组输出通过流式校验后才删除对应输入，最终候选通过相同校验后
-才交给目录发布事务。Segment 内部格式没有变化。
+`compact` 将最终可见文档重写为一个 Segment，删除 Tombstone、被覆盖记录和失效
+Posting，并重新分配连续 DocumentId。自动压缩失败只产生维护诊断，原 delta 仍可
+发布。
 
-私有工作区按逻辑文件长度记录初始 Segment、中间 Segment、spool 和候选文件。调用方
-可设置临时空间硬预算；普通 Segment 在编码完成、打开输出前做精确大小检查，归并按
-输入总大小的两倍保守预留 spool 与输出，并同时检查文件系统可用空间。该预算不统计
-源语料和已发布索引，也不等同于文件系统块配额或并发空间预留。内存容量估算同样不
-包含 allocator、运行库和内核页，也不是 RSS 硬限制；Linux 基准继续使用
-`getrusage(RUSAGE_SELF)` 独立校准。
+## 查询流程
 
-构建默认使用 Balanced 资源档位，以最多两个 `std::async` 任务并行解析固定波次，
-整波完成后仍按扫描顺序提交，因此 DocumentId 和最终字节不受调度顺序影响。逻辑
-内存账本通过 RAII reservation 同时约束扫描元数据、活动批次、并发文档及归并缓冲；
-超限属于致命构建错误，不作为普通坏文件跳过。该限制不统计 allocator、线程栈和
-writer 序列化缓冲，独立的 `memory_peak_bytes` 用于验证成功构建未突破分类预算。
+```mermaid
+flowchart LR
+    Load[加载稳定 generation]
+    Parse[解析查询]
+    Evaluate[布尔与短语求值]
+    Rank[BM25 + Top-K]
+    Present[解释与原文片段]
 
-Minimal 档位关闭 Position：Posting 仍保存词频，feature flag 清零、Positions 区
-为空且 offset 为零。加载、验证和归并均保留该能力位；词项、布尔和 BM25 查询继续
-工作，短语查询因缺少位置数据而明确拒绝。
+    Load --> Parse --> Evaluate --> Rank --> Present
+```
 
-M5 在索引目录上增加独占 `flock`。writer 持锁完成残留清理、构建和发布；
-恢复只识别 `.snowseek-build-*`、`.snowseek-manifest-*` 和严格合法的 Segment 文件名，
-未知文件保持不动。残留 Segment 的最大 ID 也参与下一 ID 计算，因此崩溃不会导致
-标识符复用。
+`Searcher` 构造时加载一个不可变 generation。查询支持显式 `AND`、`OR`、
+`NOT`、括号、双引号短语、`path:` Glob 和 `extension:` 过滤。匹配文档按
+正向查询词的 BM25 之和排序，分数相同时按相对路径排序；评分解释和原文读取只针对
+最终 Top-K。
 
-发布先完整验证并 `fsync` 候选，再 rename 为新 Segment 并同步目录。随后写入、同步
-且重读验证一个同目录 Manifest 临时文件，原子 rename 为 `MANIFEST` 并再次同步目录；
-Manifest rename 是可见 generation 的切换点。只有新 Manifest 的目录项持久化成功后
-才删除旧 Segment。提交前失败保留旧 generation，提交后清理失败记录诊断并由下一次
-writer 恢复。无锁 reader 若正好跨越提交，会重试尚未打开的旧路径；已打开的旧文件
-即使被 unlink 仍保持完整，因此查询只得到完整旧 generation 或完整新 generation。
+Minimal 档位不保存 Position，因此仍支持词项、布尔、过滤和 BM25，但拒绝短语查询。
 
-`update` 对扫描文件执行稳定的 `stat → 原始字节 CRC32C → stat`，仅对新增或变化
-文件分波并行解析；提交仍按路径顺序发生。源中消失的 live 路径写入 Tombstone。
-`remove` 使用大小写敏感 `fnmatch(..., 0)` 选择 live 路径。两者通常向 Manifest 追加
-delta Segment；超过 16 个活动 Segment 时先尝试自动压缩，失败仍允许提交 delta 并
-返回维护诊断。
+## 存储与可靠性
 
-跨 Segment 可见性由 `(Manifest 顺序, Segment 内 DocumentId)` 的最后记录决定。
-`compact` 丢弃 Tombstone 和被覆盖记录，过滤失去文档的 Posting，并重映射为一个
-无 Tombstone v2 Segment。Manifest rename 仍是唯一提交点，发布后只删除
-`old_active - new_active`。
+索引目录由一个 `MANIFEST` 和一个或多个不可变 Segment 组成，精确布局见
+[index-format.md](index-format.md)。0.2 reader 只接受 Manifest v1 和 Segment v2。
 
-0.2 不再把 AST、内存索引或磁盘结构作为公开 C++ API。`IndexWriter` 绑定目标目录与
-`IndexOptions`，并用 `IndexOutcome`、具名计数、精简指标和分阶段诊断返回维护结果；
-`Searcher` 以 PImpl 隐藏加载结构，snippet 用 `optional<SourceSnippet>` 表达未请求或
-不可读。读取 Segment v1 或无 Manifest 目录会要求重新构建；`index` 发布新 v2
-Manifest 后才清理旧固定 Segment，因此提交前失败不会破坏旧目录。
+writer 在目录 fd 上持有独占 `flock`，按“写入并同步候选 Segment → 写入并同步
+临时 Manifest → 原子替换 `MANIFEST`”发布。Manifest rename 是唯一逻辑提交点：
+
+- 提交前失败继续使用旧 generation；
+- 提交后才清理退休 Segment；
+- 清理失败返回诊断，并由下一次 writer 重试；
+- reader 无锁读取，跨越并发提交时重试，最终只看到完整旧版本或完整新版本。
+
+内存预算统计文档、词典、Posting 和构建中间数据的逻辑容量，不等于 RSS；临时空间
+预算统计私有工作区文件的逻辑长度，不等于文件系统块配额。
+
+## 测试与构建
+
+常用检查：
+
+```bash
+cmake -S . -B build
+cmake --build build
+(cd build && ctest --output-on-failure)
+./tools/test-matrix.sh
+```
+
+`test-matrix.sh` 覆盖 GCC/Clang × Debug/Release，并可启用 `-Werror`。格式、损坏
+数据、多 Segment 可见性、资源上限、并发 writer 和发布故障点均有集成测试。
+
+## 后续 TODO
+
+按优先级推进：
+
+1. 在 AArch64 设备复测 RSS、构建吞吐、查询延迟和跨架构索引兼容性。
+2. 增加可配置临时目录，并明确跨文件系统场景下的空间检查与发布约束。
+3. 为完整构建、增量更新和压缩建立统一的冷/热缓存基准，记录体积、吞吐、
+   P50/P95/P99 和写放大。
+4. 基于实测评估 Posting/Position 的 Delta + Varint、Skip/Galloping Search，以及
+   `pread` 与 `mmap`；需要改变磁盘字节时使用新格式版本，不修改 v2 契约。
+5. 可选增加轻量 C/C++ Lexer 和 `symbol:`、`comment:` 字段；解析失败必须安全
+   降级为普通文本索引。
+
+每项性能优化都应附带可复现的前后数据；没有测量收益时保持现有实现。

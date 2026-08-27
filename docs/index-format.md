@@ -1,54 +1,88 @@
-# SnowSeek Segment Format v2
+# 索引目录与磁盘格式
 
-## 1. Scope
+本文统一说明 SnowSeek 0.2 的 Manifest v1、Segment v2、多段可见性和发布契约。
 
-Version 2 stores one immutable Segment in the ordered active set selected by
-the directory's [`MANIFEST`](manifest-format.md). Segment filenames derive from
-monotonic IDs, for example
-`<index-directory>/segment-0000000000000001.idx`. The directory layer does not
-change the Segment bytes defined here. The
-format contains no native C++ object representations: every integer has an
-explicit width and is encoded in little-endian byte order.
+## 通用约定
 
-Readers must reject unsupported versions or feature flags, nonzero reserved
-fields, invalid offsets or lengths, integer overflow, truncation, and checksum
-failure. CRC32C detects accidental corruption and is not a security hash.
+- 所有整数使用固定宽度小端编码，不写入原生 C++ 对象或结构体填充。
+- offset 和 length 均按字节计算，读取前必须检查溢出、越界、截断和尾随数据。
+- CRC32C 使用 Castagnoli 多项式，校验值 `CRC32C("123456789") == 0xE3069283`。
+- CRC32C 只检测意外损坏，不是安全哈希。
 
-## 2. Header
+索引目录的稳定文件为：
 
-The header is exactly 200 bytes. Header CRC32C covers bytes `[0, 192)`; the
-checksum field and final reserved field are outside that range.
+```text
+MANIFEST
+segment-0000000000000001.idx
+segment-0000000000000002.idx
+...
+```
 
-| Offset | Size | Field | Value |
+`MANIFEST` 选择当前可见 generation 和活动 Segment。SegmentId 非零且单调递增，
+文件名由 ID 格式化为至少 16 位十进制数字。
+
+## Manifest v1
+
+Manifest 由固定 64-byte Header 和连续的 SegmentId payload 组成。
+
+### Header
+
+| Offset | Size | 字段 | 约束 |
+|---:|---:|---|---|
+| 0 | 8 | Magic | ASCII `SNOWMNFT` |
+| 8 | 4 | Version | `1` |
+| 12 | 4 | Flags | `0` |
+| 16 | 4 | Header size | `64` |
+| 20 | 4 | Active Segment count | 正整数 |
+| 24 | 8 | Generation | 非零 |
+| 32 | 8 | Next SegmentId | 大于所有活动 ID |
+| 40 | 8 | Payload length | `count × 8` |
+| 48 | 4 | Payload CRC32C | 完整 payload |
+| 52 | 4 | Header CRC32C | bytes `[0, 52)` |
+| 56 | 8 | Reserved | `0` |
+
+### Payload
+
+Payload 是 `count` 个连续的小端 `u64 SegmentId`。ID 必须非零且严格递增，文件
+必须在 payload 末尾结束。
+
+## Segment v2
+
+一个 Segment 是不可变文件，依次包含 200-byte Header 和五个 section：
+
+```text
+Header → Documents → Paths → Terms → Postings → Positions
+```
+
+### Header
+
+| Offset | Size | 字段 | 约束 |
 |---:|---:|---|---|
 | 0 | 8 | Magic | ASCII `SNOWSEEK` |
 | 8 | 4 | Format version | `2` |
-| 12 | 4 | Feature flags | Supported bits only |
+| 12 | 4 | Feature flags | 仅支持已知位 |
 | 16 | 4 | Header size | `200` |
 | 20 | 4 | Section count | `5` |
-| 24 | 8 | File size | Exact Segment byte length |
-| 32 | 160 | Section directory | Five 32-byte descriptors |
-| 192 | 4 | Header CRC32C | CRC32C of bytes `[0, 192)` |
+| 24 | 8 | File size | Segment 精确长度 |
+| 32 | 160 | Section directory | 五个 32-byte descriptor |
+| 192 | 4 | Header CRC32C | bytes `[0, 192)` |
 | 196 | 4 | Reserved | `0` |
 
-Feature bit `0x00000001` indicates that the Positions section is present.
-Every other bit is unsupported. When the bit is clear, the Positions
-section must be empty and every Posting position offset must be zero.
+Feature bit `0x00000001` 表示保存 Position。该位关闭时，Positions section 必须为空，
+所有 Posting 的 position offset 必须为零。
 
-### 2.1 Section descriptor
+### Section descriptor
 
-Each descriptor has this 32-byte layout:
-
-| Relative offset | Size | Field |
+| 相对 offset | Size | 字段 |
 |---:|---:|---|
 | 0 | 4 | Section kind |
-| 4 | 4 | Reserved flags, always `0` |
-| 8 | 8 | Absolute section offset from the start of the file |
-| 16 | 8 | Section length in bytes |
-| 24 | 4 | CRC32C of the raw section bytes |
-| 28 | 4 | Reserved, always `0` |
+| 4 | 4 | Flags，固定为 `0` |
+| 8 | 8 | Segment 内绝对 offset |
+| 16 | 8 | 长度 |
+| 24 | 4 | Section CRC32C |
+| 28 | 4 | Reserved，固定为 `0` |
 
-Descriptors occur exactly once in this order:
+descriptor 必须按以下顺序各出现一次：
 
 | Kind | Value |
 |---|---:|
@@ -58,114 +92,116 @@ Descriptors occur exactly once in this order:
 | Postings | 4 |
 | Positions | 5 |
 
-The Documents offset is 200. Each later offset equals the preceding offset plus
-length, and the final offset plus length equals the header file size. Empty
-sections have length and CRC32C equal to zero. Gaps and overlaps are invalid.
+Documents 从 byte 200 开始；后一个 section 必须紧接前一个 section，最后一个 section
+的末尾必须等于 Header 中的 file size。空 section 的长度和 CRC32C 都为零。
 
-## 3. Sections
+## Section 布局
 
-All offsets stored inside a section are relative to the beginning of the
-referenced section. Counts and lengths must be validated before multiplication
-or addition.
+section 内部保存的 offset 都相对于被引用 section 的起点。
 
-### 3.1 Documents
+### Documents
 
-The section begins with a `u64` document count, followed by that many 48-byte
-records in ascending, contiguous DocumentId order.
+开头是 `u64 document_count`，之后是连续的 48-byte 记录。DocumentId 从零开始并
+严格连续。
 
-| Relative offset | Size | Field |
+| 记录 offset | Size | 字段 |
 |---:|---:|---|
 | 0 | 4 | DocumentId |
 | 4 | 4 | Path length |
-| 8 | 8 | Offset in Paths |
+| 8 | 8 | Paths offset |
 | 16 | 8 | Source file size |
-| 24 | 8 | Signed modification time in Unix Epoch nanoseconds |
-| 32 | 4 | Indexed token count |
+| 24 | 8 | Unix Epoch 纳秒 mtime 的二进制补码 |
+| 32 | 4 | Token count |
 | 36 | 4 | Document flags |
 | 40 | 4 | Raw source CRC32C |
-| 44 | 4 | Reserved, always `0` |
+| 44 | 4 | Reserved，固定为 `0` |
 
-The signed timestamp uses its 64-bit two's-complement bit representation in
-little-endian order.
+Document flag：
 
-Document flag bit `0x00000001` marks a Tombstone and bit `0x00000002` marks
-the content CRC32C as valid. Other bits are rejected. A live record may carry
-the CRC used by incremental change detection. A Tombstone stores only its
-relative path: file size, mtime, token count, CRC, and CRC-valid bit must all be
-zero, and no Posting may reference it. CRC32C is a non-adversarial change
-fingerprint, not a cryptographic hash.
+- `0x00000001`：Tombstone；
+- `0x00000002`：content CRC32C 有效。
 
-### 3.2 Paths
+live 记录可保存源文件 CRC32C，用于增量变化检测。Tombstone 只保存路径，其文件
+大小、mtime、Token 数、CRC 和 CRC-valid bit 必须为零，且不能被 Posting 引用。
 
-Paths are source-root-relative generic UTF-8 bytes concatenated without a
-terminator. Document records delimit them with offset and length. Writers reject
-paths that cannot be represented as nonempty valid UTF-8; `/` is the portable
-separator stored by `generic_u8string()`. Absolute paths and `.` or `..` path
-components are invalid, so a stored path cannot escape its source root.
+### Paths
 
-### 3.3 Terms
+所有路径按记录顺序连接，不带终止符，由 Document 的 offset 和 length 定界。路径是
+非空、规范化、源目录相对的 UTF-8 generic path，分隔符为 `/`；绝对路径以及
+`.`、`..` 分量非法。
 
-The section starts with a `u64` term count, then that many fixed 32-byte records,
-then the concatenated term bytes referenced by those records.
+### Terms
 
-| Relative offset | Size | Field |
+开头是 `u64 term_count`，之后是连续的 32-byte 记录，再之后是所有 term bytes。
+
+| 记录 offset | Size | 字段 |
 |---:|---:|---|
-| 0 | 8 | Term byte offset in this Terms section |
-| 8 | 4 | Term byte length |
+| 0 | 8 | Terms 内 term byte offset |
+| 8 | 4 | Term length |
 | 12 | 4 | Document frequency |
-| 16 | 8 | Posting byte offset in Postings |
-| 24 | 8 | Posting byte length |
+| 16 | 8 | Postings offset |
+| 24 | 8 | Posting length |
 
-Term records are strictly sorted by normalized term bytes. Terms are nonempty
-ASCII bytes. Each posting length equals document frequency multiplied by
-16.
+term 必须是非空 ASCII bytes，并严格递增。Posting length 必须等于
+`document_frequency × 16`。
 
-### 3.4 Postings
+### Postings
 
-Each Posting is a fixed 16-byte record. A term's records are contiguous and
-DocumentIds are strictly increasing.
+每条 Posting 固定 16 bytes，同一 term 的 Posting 连续且 DocumentId 严格递增。
 
-| Relative offset | Size | Field |
+| 记录 offset | Size | 字段 |
 |---:|---:|---|
 | 0 | 4 | DocumentId |
 | 4 | 4 | Term frequency |
-| 8 | 8 | Position byte offset in Positions |
+| 8 | 8 | Positions offset |
 
-Term frequency is nonzero. When Positions are enabled, the offset references
-exactly `term_frequency` consecutive position values. When disabled, the offset
-is zero.
+frequency 必须非零。启用 Position 时，offset 指向连续
+`term_frequency` 个 `u32`；未启用时 offset 为零。
 
-### 3.5 Positions
+### Positions
 
-Positions are absolute zero-based token ordinals encoded as consecutive `u32`
-values in Posting order. Positions for one Posting are strictly increasing.
-Delta and Varint compression require a later format version or feature and are
-deferred to M6.
+Position 是按 Posting 顺序保存的绝对、从零开始的 Token 序号，每项为小端 `u32`。
+同一 Posting 内必须严格递增。
 
-## 4. Checksums
+## 多 Segment 可见性
 
-CRC32C uses the reflected Castagnoli polynomial `0x82F63B78`, an initial state
-of `0xFFFFFFFF`, and a final XOR of `0xFFFFFFFF`. The check value for ASCII
-`123456789` is `0xE3069283`.
+Manifest 按 SegmentId 递增顺序列出活动 Segment。对同一路径，按
+`(Manifest 顺序, Segment 内 DocumentId)` 最后出现的记录获胜：
 
-## 5. Multi-Segment visibility
+- 最后记录是 live：覆盖旧版本；
+- 最后记录是 Tombstone：路径不可见。
 
-The Manifest orders active SegmentIds increasingly. For each relative path,
-the last record in `(Manifest Segment order, local DocumentId order)` is
-visible. A last live record replaces an older version; a last Tombstone removes
-the path. Directory loading validates all Segments first, assigns contiguous
-global IDs only to visible live records, and remaps retained Postings. BM25 uses
-this global live population and the filtered document frequency. All active
-Segments must agree on the Positions feature.
+读取目录时先验证所有活动 Segment，再为最终可见 live 文档分配连续全局 DocumentId，
+只装载并重映射这些文档的 Posting。所有活动 Segment 必须具有相同的 Position 能力。
+BM25 使用最终可见文档数和过滤后的 document frequency。
 
-## 6. Compatibility
+## 发布与恢复
 
-A 0.2 reader accepts exactly Segment v2 with known feature bits; Segment v1 is
-rejected with an instruction to rebuild the index. A 0.2 writer emits the same
-v2 byte contract documented here, so existing Segment v2 + Manifest v1 indexes
-remain byte-compatible. Logical records use fixed-width identifiers,
-explicit byte order, and no host padding so a Segment produced on x86_64 Linux
-can be consumed on AArch64 Linux. Readers retain term frequency when the
-Positions feature is absent; term, Boolean, filtering, and BM25 operations stay
-available, while exact phrase evaluation must report that positions are not
-present rather than silently degrading to conjunction.
+Linux writer 在索引目录 fd 上持有独占 `flock`，按以下顺序发布：
+
+1. 完整验证并 `fsync` 候选 Segment；
+2. rename 为最终 Segment 文件并 `fsync` 目录；
+3. 创建同目录 Manifest 临时文件，写入、`fsync` 并重读验证；
+4. 原子 rename 为 `MANIFEST`；
+5. 再次 `fsync` 目录；
+6. 删除 `old_active - new_active` 并同步目录。
+
+Manifest rename 是唯一逻辑提交点。提交前失败继续选择旧 generation；提交后同步或
+清理失败保留旧 Segment 并返回诊断。
+
+下一次 writer 只清理可识别的 `.snowseek-build-*`、`.snowseek-manifest-*` 和未被
+Manifest 引用的合法 Segment 文件，未知文件保持不动。残留合法 Segment 的最大 ID
+参与下一 ID 计算，避免崩溃后复用标识符。
+
+## 兼容性
+
+0.2 reader 只接受 Manifest v1 和 Segment v2，并拒绝未知版本、feature bit、非零
+reserved、非法边界、顺序、计数或校验和。Segment v1 或缺少 Manifest 的目录会要求
+重新构建。
+
+`index` 是旧目录的安全迁移入口：新 Segment v2 和 Manifest v1 持久化后才删除旧
+固定 Segment。现有 Segment v2 + Manifest v1 字节保持兼容。固定宽度、小端编码和
+无宿主 padding 允许 x86_64 Linux 与 AArch64 Linux 互读。
+
+Position 关闭时仍保留 term frequency，因此词项、布尔、过滤和 BM25 查询可用；
+短语查询必须明确报错。Delta/Varint 等编码变化需要新的 Segment 版本。

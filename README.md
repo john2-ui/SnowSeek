@@ -109,8 +109,8 @@ Segment 的物理计数。现有 Segment v2 + Manifest v1 字节保持兼容。
 
 可选的确定性索引基准、参数和当前实测见
 [docs/memory-baseline.md](docs/memory-baseline.md)。
-Manifest 的精确磁盘契约见
-[docs/manifest-format.md](docs/manifest-format.md)。
+Manifest v1 与 Segment v2 的统一磁盘契约见
+[docs/index-format.md](docs/index-format.md)。
 
 ## 目录
 
@@ -119,8 +119,8 @@ Manifest 的精确磁盘契约见
 - `tests/`：无第三方测试框架的单元和集成测试；
 - `benchmarks/`：可选性能基准；
 - `cmake/toolchains/`：嵌入式 Linux 交叉编译模板；
-- `docs/`：架构、格式和开发规划文档；
+- `docs/`：架构、格式、资源基线和后续计划；
 - `tools/`：索引检查、数据集生成等辅助工具；
 - `testdata/`：小型、可版本控制的测试语料。
 
-详细实施顺序见 [docs/ROADMAP.md](docs/ROADMAP.md)。
+项目结构与后续 TODO 见 [docs/architecture.md](docs/architecture.md)。
