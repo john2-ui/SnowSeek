@@ -358,7 +358,8 @@ write_loaded_candidate(const std::filesystem::path &path,
  * @param current_memory Reservation charging current retained storage.
  * @param records Deterministically ordered live records and Tombstones.
  * @param options Resource and encoding options for the operation.
- * @param index_directory Directory used for workspace and diagnostics.
+ * @param index_directory Locked destination used for publication and
+ * diagnostics.
  * @param publication_mode Append or replacement publication policy.
  * @param memory_budget Shared classified-memory budget.
  * @param result Operation result updated with publication statistics.
@@ -375,7 +376,9 @@ void publish_delta(storage::detail::IndexDirectoryTransaction &publication,
         auto operation_options = options;
         operation_options.in_memory_options.store_positions =
                 current.index.stores_positions();
-        BuildWorkspace workspace(index_directory,
+        const auto workspace_parent =
+                options.temporary_directory.value_or(index_directory);
+        BuildWorkspace workspace(workspace_parent,
                                  options.temporary_space_budget_bytes);
         auto delta =
                 build_delta(records, operation_options, memory_budget, result);
@@ -445,6 +448,7 @@ void publish_delta(storage::detail::IndexDirectoryTransaction &publication,
         static_cast<void>(candidate_stats);
         builder_detail::publish_candidate(publication, candidate,
                                           std::move(active), workspace,
+                                          options.temporary_directory.has_value(),
                                           memory_budget, result);
 }
 
@@ -571,7 +575,9 @@ IndexBuilder::compact(const std::filesystem::path &index_directory) const {
                 return result;
         }
 
-        BuildWorkspace workspace(index_directory,
+        const auto workspace_parent =
+                options_.temporary_directory.value_or(index_directory);
+        BuildWorkspace workspace(workspace_parent,
                                  options_.temporary_space_budget_bytes);
         const auto candidate = workspace.path() / "candidate.idx";
         static_cast<void>(
@@ -581,6 +587,7 @@ IndexBuilder::compact(const std::filesystem::path &index_directory) const {
         result.temporary_segment_count = 1;
         builder_detail::publish_candidate(publication, candidate,
                                           {publication.segment_id()}, workspace,
+                                          options_.temporary_directory.has_value(),
                                           memory_budget, result);
         return result;
 }

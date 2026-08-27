@@ -71,6 +71,7 @@ namespace {
 
 constexpr std::string_view kBuildPrefix = ".snowseek-build-";
 constexpr std::string_view kManifestTemporaryPrefix = ".snowseek-manifest-";
+constexpr std::string_view kSegmentTemporaryPrefix = ".snowseek-segment-";
 
 thread_local detail::PublishObserver publish_observer = nullptr;
 
@@ -153,6 +154,11 @@ struct ManifestTemporary {
         std::filesystem::path path; ///< Exact staging path in the index directory.
 };
 
+struct SegmentTemporary {
+        detail::UniqueFd fd; ///< Owned descriptor for the staging file.
+        std::filesystem::path path; ///< Exact staging path in the index directory.
+};
+
 /**
  * @brief Creates a unique Manifest staging file in the index directory.
  * @param directory Directory that will receive the committed Manifest.
@@ -171,6 +177,26 @@ create_manifest_temporary(const std::filesystem::path &directory) {
         }
         return ManifestTemporary{detail::UniqueFd(fd),
                                  std::filesystem::path(writable.data())};
+}
+
+/**
+ * @brief Creates a unique Segment staging file in the index directory.
+ * @param directory Directory that will receive the committed Segment.
+ * @return Owned descriptor and exact staging path.
+ * @throws std::runtime_error If the temporary file cannot be created.
+ */
+[[nodiscard]] SegmentTemporary
+create_segment_temporary(const std::filesystem::path &directory) {
+        auto pattern = (directory / ".snowseek-segment-XXXXXX").string();
+        std::vector<char> writable(pattern.begin(), pattern.end());
+        writable.push_back('\0');
+        const int fd = ::mkostemp(writable.data(), O_CLOEXEC);
+        if (fd == -1) {
+                throw_errno("failed to create Segment temporary file",
+                            directory);
+        }
+        return SegmentTemporary{detail::UniqueFd(fd),
+                                std::filesystem::path(writable.data())};
 }
 
 /** @brief Reports whether a path exists without swallowing inspection errors. */
@@ -603,6 +629,7 @@ struct RecoveryScan {
                                 scan.stale_paths.push_back(entry.path());
                         }
                 } else if (name.starts_with(kBuildPrefix) ||
+                           name.starts_with(kSegmentTemporaryPrefix) ||
                            name.starts_with(kManifestTemporaryPrefix)) {
                         scan.stale_paths.push_back(entry.path());
                 }
@@ -749,12 +776,14 @@ void write_synced_manifest(ManifestTemporary &temporary,
 
 /**
  * @brief Removes uncommitted publication files and best-effort syncs rollback.
+ * @param candidate Candidate staging path before rename, if still present.
  * @param final_segment Renamed candidate path, if present.
  * @param temporary_manifest Manifest staging path, if created.
  * @param directory_fd Locked directory descriptor.
  * @param directory Directory to sync after removals.
  */
 void rollback_publication(
+        const std::filesystem::path &candidate,
         const std::filesystem::path &final_segment,
         const std::filesystem::path &temporary_manifest, int directory_fd,
         const std::filesystem::path &directory) noexcept {
@@ -762,6 +791,7 @@ void rollback_publication(
         if (!temporary_manifest.empty()) {
                 std::filesystem::remove(temporary_manifest, ignored);
         }
+        std::filesystem::remove(candidate, ignored);
         std::filesystem::remove(final_segment, ignored);
         try {
                 sync_directory(directory_fd, directory);
@@ -895,18 +925,37 @@ std::filesystem::path IndexDirectoryTransaction::segment_path() const {
         return directory_ / segment_file_name(segment_id_);
 }
 
+std::filesystem::path IndexDirectoryTransaction::stage_candidate(
+        const std::filesystem::path &candidate) const {
+        auto staging = create_segment_temporary(directory_);
+        try {
+                staging.fd.close_checked(staging.path);
+                std::filesystem::copy_file(
+                        candidate, staging.path,
+                        std::filesystem::copy_options::overwrite_existing);
+        } catch (...) {
+                std::error_code ignored;
+                std::filesystem::remove(staging.path, ignored);
+                throw;
+        }
+        return staging.path;
+}
+
 std::vector<PublicationDiagnostic> IndexDirectoryTransaction::publish(
         const std::filesystem::path &candidate,
         std::string_view manifest_bytes) {
         const auto final_segment = segment_path();
         const auto final_manifest = directory_ / kManifestFileName;
-        const auto new_manifest = validate_publication_request(
-                manifest_bytes, generation_, segment_id_, active_segments_);
-        static_cast<void>(validate_index_file(candidate));
+        IndexManifest new_manifest;
         std::filesystem::path temporary_manifest;
         bool committed = false;
 
         try {
+                new_manifest = validate_publication_request(
+                        manifest_bytes, generation_, segment_id_,
+                        active_segments_);
+                static_cast<void>(validate_index_file(candidate));
+
                 // Persist the candidate before exposing its final name.
                 sync_file(candidate);
                 observe(PublishObservationPoint::candidate_synced);
@@ -925,7 +974,7 @@ std::vector<PublicationDiagnostic> IndexDirectoryTransaction::publish(
                 observe(PublishObservationPoint::manifest_renamed);
         } catch (...) {
                 if (!committed) {
-                        rollback_publication(final_segment,
+                        rollback_publication(candidate, final_segment,
                                              temporary_manifest,
                                              directory_fd_.get(), directory_);
                 }

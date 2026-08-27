@@ -120,8 +120,18 @@ class IndexDirectoryTransaction {
         [[nodiscard]] std::filesystem::path segment_path() const;
 
         /**
+         * @brief Copies a candidate into a unique staging file in the locked
+         * index directory.
+         * @param candidate Complete candidate stored on any filesystem.
+         * @return Staging path suitable for same-filesystem publication.
+         * @throws std::runtime_error If creation, copying, or closing fails.
+         */
+        [[nodiscard]] std::filesystem::path stage_candidate(
+                const std::filesystem::path &candidate) const;
+
+        /**
          * @brief Durably publishes a validated candidate and Manifest bytes.
-         * @param candidate Candidate file in the same filesystem.
+         * @param candidate Owned staging file in the index filesystem.
          * @param manifest_bytes Prevalidated Manifest selecting segment_id().
          * @return Nonfatal errors encountered while deleting the old generation.
          * @throws std::runtime_error On any failure before the Manifest rename.

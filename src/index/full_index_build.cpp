@@ -153,6 +153,25 @@ void BuildWorkspace::require_additional(std::uint64_t bytes) const {
         }
 }
 
+void BuildWorkspace::require_publication_staging(
+        std::uint64_t bytes,
+        const std::filesystem::path &index_directory) const {
+        if (bytes > remaining_bytes()) {
+                throw std::runtime_error("temporary space budget exceeded");
+        }
+        std::error_code error;
+        const auto space = std::filesystem::space(index_directory, error);
+        if (error) {
+                throw std::runtime_error(
+                        "failed to inspect index filesystem space: " +
+                        error.message());
+        }
+        if (bytes > space.available) {
+                throw std::runtime_error(
+                        "insufficient index filesystem space for publication staging");
+        }
+}
+
 void BuildWorkspace::add_file(std::uint64_t bytes) {
         if (bytes > remaining_bytes()) {
                 throw std::runtime_error("temporary space budget exceeded");
@@ -274,18 +293,31 @@ void publish_candidate(storage::detail::IndexDirectoryTransaction &publication,
                        const std::filesystem::path &candidate,
                        std::vector<storage::SegmentId> active_segments,
                        BuildWorkspace &workspace,
+                       bool stage_in_index_directory,
                        BuildMemoryBudget &memory_budget,
                        PersistentBuildResult &result) {
-        static_cast<void>(storage::validate_index_file(candidate));
+        const auto candidate_stats = storage::validate_index_file(candidate);
         const storage::IndexManifest manifest{publication.generation(),
                                               publication.segment_id() + 1,
                                               std::move(active_segments)};
         const auto manifest_bytes = storage::encode_manifest(manifest);
         MemoryReservation manifest_memory(memory_budget);
         manifest_memory.resize(manifest_bytes.size());
-        workspace.require_additional(manifest_bytes.size());
-        workspace.note_transient_peak(manifest_bytes.size());
-        const auto cleanup = publication.publish(candidate, manifest_bytes);
+        auto publishable_candidate = candidate;
+        if (stage_in_index_directory) {
+                const auto staging_bytes = checked_add(
+                        candidate_stats.file_size, manifest_bytes.size(),
+                        "publication staging bytes");
+                workspace.require_publication_staging(
+                        staging_bytes, publication.segment_path().parent_path());
+                workspace.note_transient_peak(staging_bytes);
+                publishable_candidate = publication.stage_candidate(candidate);
+        } else {
+                workspace.require_additional(manifest_bytes.size());
+                workspace.note_transient_peak(manifest_bytes.size());
+        }
+        const auto cleanup =
+                publication.publish(publishable_candidate, manifest_bytes);
         for (const auto &diagnostic : cleanup) {
                 result.cleanup_errors.push_back(
                         BuildError{diagnostic.path, diagnostic.message});
@@ -790,7 +822,9 @@ IndexBuilder::build(const std::filesystem::path &source,
         const filesystem::Scanner scanner(
                 options_.in_memory_options.scan_options);
         auto scan_result = scanner.scan(canonical_source);
-        BuildWorkspace workspace(index_directory,
+        const auto workspace_parent =
+                options_.temporary_directory.value_or(index_directory);
+        BuildWorkspace workspace(workspace_parent,
                                  options_.temporary_space_budget_bytes);
         BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
         PersistentBuildResult result;
@@ -836,6 +870,7 @@ IndexBuilder::build(const std::filesystem::path &source,
         result.added_files = result.stats.indexed_files;
         builder_detail::publish_candidate(publication, candidate,
                                           {publication.segment_id()}, workspace,
+                                          options_.temporary_directory.has_value(),
                                           memory_budget, result);
         return result;
 }

@@ -20,6 +20,8 @@ cmake --build build
 ./build/snowseek index ./testdata --index ./snowseek-index \
   --temporary-space-limit 4GiB --merge-fan-in 16
 ./build/snowseek index ./testdata --index ./snowseek-index \
+  --temporary-directory /mnt/snowseek-tmp
+./build/snowseek index ./testdata --index ./snowseek-index \
   --profile minimal --memory-limit 128MiB --threads 1
 ./build/snowseek update ./testdata --index ./snowseek-index --threads 2
 ./build/snowseek remove ./snowseek-index --path '*.log' --path 'cache/**'
@@ -49,10 +51,16 @@ Segment 和 Manifest 持久化后才清理旧固定 Segment，提交点前失败
 fan-in 4 且关闭 Position；Performance 使用 1 GiB、硬件线程数、512 MiB 批次和
 fan-in 32。显式 `--memory-limit`、`--threads`、`--merge-fan-in` 可覆盖档位。
 
-构建在目标目录的私有工作区刷写临时 Segment，再多级归并为一个候选 Segment。临时空间
-默认不限额；
+构建默认在目标目录的私有工作区刷写临时 Segment，再多级归并为一个候选 Segment。
+`--temporary-directory <dir>` 可将 `index`、`update`、`remove` 和 `compact` 的工作区
+放入一个已存在目录。显式配置后，最终候选始终先复制回索引目录的
+`.snowseek-segment-*` 暂存文件，再以同文件系统 rename 发布；因此临时目录可以位于
+另一文件系统。临时空间默认不限额；
 `--temporary-space-limit` 接受字节或 `B`、`KiB`、`MiB`、`GiB`、`TiB`，按输入
-Segment 总大小保守预检 spool 与候选文件的最坏空间，可能早于实际磁盘耗尽而拒绝。
+Segment 总大小保守预检 spool 与候选文件的最坏空间。使用外部临时目录时，逻辑峰值
+还包括“外部候选 + 索引目录候选副本 + Manifest”的重叠窗口，通常至少接近最终
+Segment 大小的两倍；构建文件检查临时文件系统，发布副本则单独检查索引文件系统，
+任一检查都可能早于实际磁盘耗尽而拒绝。
 维护命令按固定顺序输出 `outcome`、`revision`、`segments`，再输出命令相关计数：
 `index` 为 `indexed`、`failed`，`update` 为 `added`、`modified`、`removed`、
 `unchanged`、`failed`，`remove` 为 `matched`，`compact` 为
@@ -65,7 +73,10 @@ Segment 总大小保守预检 spool 与候选文件的最坏空间，可能早�
 都不会在 Manifest 提交点前替换已有索引，工作区会被清理。提交后的旧 Segment 清理
 失败不会回滚新 generation：CLI 返回状态码 2，下一次 writer 会重试清理。写入使用
 目录级 `flock`、文件/目录 `fsync` 和同目录原子 rename；查询无锁读取一个完整
-generation。无 Position 索引仍支持词项、布尔和 BM25，短语查询会明确报错。
+generation。下一次 writer 会清理索引目录内的 `.snowseek-segment-*` 发布残留；
+进程崩溃遗留在共享外部临时目录的 `.snowseek-build-*` 不会自动跨索引清理，以免删除
+其他 writer 的工作区。无 Position 索引仍支持词项、布尔和 BM25，短语查询会明确
+报错。
 
 查询表达式支持括号、大小写不敏感的 `AND`、`OR`、`NOT`、双引号精确短语、
 `path:` Glob 和 `extension:` 精确扩展名过滤。相邻词项不会隐式连接，必须显式写
@@ -88,8 +99,8 @@ generation。无 Position 索引仍支持词项、布尔和 BM25，短语查询�
 
 AST、Scanner、Tokenizer、DocumentStore、内存倒排结构、BM25、codec 和 Manifest
 均为 `src` 内部实现，不再通过公开头间接暴露。`IndexOptions` 只公开资源档位及
-`memory_limit_bytes`、`temporary_space_limit_bytes`、`worker_threads`、
-`merge_fan_in` 四个可选覆盖项。`IndexResult` 将结果分为
+`memory_limit_bytes`、`temporary_space_limit_bytes`、`temporary_directory`、
+`worker_threads`、`merge_fan_in` 五个可选覆盖项。`IndexResult` 将结果分为
 `IndexOutcome`、revision/活动 Segment、`ChangeCounts`、精简 `BuildMetrics` 和按
 `DiagnosticStage` 标记的统一诊断列表。`IndexStats` 的 `documents`、`terms`、
 `postings`、`positions` 是可见逻辑计数，`bytes`、`segments`、`tombstones` 是活动

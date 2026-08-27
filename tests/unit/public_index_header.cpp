@@ -12,6 +12,8 @@ namespace snowseek::test {
 /** @brief Exercises the complete public index result vocabulary. */
 bool index_header_is_self_contained() {
         static_assert(std::is_move_constructible_v<IndexWriter>);
+        IndexOptions options;
+        options.temporary_directory = std::filesystem::path("workspace");
         const IndexResult result{
                 .outcome = IndexOutcome::published,
                 .revision = 1,
@@ -22,7 +24,9 @@ bool index_header_is_self_contained() {
                         DiagnosticStage::document, {}, "recoverable"}},
         };
         return result.outcome == IndexOutcome::published &&
-               result.changes.added == 1 && result.metrics.indexed_files == 1;
+               result.changes.added == 1 && result.metrics.indexed_files == 1 &&
+               options.temporary_directory ==
+                       std::filesystem::path("workspace");
 }
 
 } // namespace snowseek::test

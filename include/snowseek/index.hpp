@@ -78,6 +78,8 @@ struct IndexOptions {
                 memory_limit_bytes; ///< Byte cap; absent uses profile default.
         std::optional<std::uint64_t>
                 temporary_space_limit_bytes; ///< Optional workspace byte cap.
+        std::optional<std::filesystem::path>
+                temporary_directory; ///< Existing workspace parent directory.
         std::optional<std::size_t>
                 worker_threads; ///< Parsers; absent uses profile default.
         std::optional<std::size_t>
@@ -166,7 +168,8 @@ class IndexWriter {
          * @param index_directory Directory created by rebuild and required by
          * maintenance operations.
          * @param options Resource profile and explicit limit overrides.
-         * @throws std::invalid_argument If an explicit limit is invalid.
+         * @throws std::invalid_argument If an explicit limit is invalid or the
+         * configured temporary directory does not exist.
          */
         explicit IndexWriter(std::filesystem::path index_directory,
                              IndexOptions options = {});

@@ -5,6 +5,7 @@
  */
 
 #include "index/index_builder.hpp"
+#include "index/index_builder_internal.hpp"
 #include "storage/index_file.hpp"
 
 #include "support/index_builder_fixture.hpp"
@@ -113,6 +114,7 @@ void counts_failed_document_buffers() {
 
 /** @brief Verifies persistent builder resource limits. */
 void validates_persistent_resource_options() {
+        const TemporaryDirectory temporary;
         const auto defaults = snowseek::index::PersistentBuildOptions{};
         const auto balanced = snowseek::index::persistent_build_options(
                 snowseek::index::ResourceProfile::balanced);
@@ -184,6 +186,44 @@ void validates_persistent_resource_options() {
                                 snowseek::index::IndexBuilder(options));
                 },
                 "a zero worker count should be rejected");
+
+        options = {};
+        options.temporary_directory = temporary.path() / "missing";
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
+                },
+                "a missing temporary directory should be rejected");
+        const auto regular_file = temporary.path() / "regular-file";
+        write_file(regular_file, "not a directory");
+        options.temporary_directory = regular_file;
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&options] {
+                        static_cast<void>(
+                                snowseek::index::IndexBuilder(options));
+                },
+                "a regular-file temporary path should be rejected");
+}
+
+/** @brief Verifies publication capacity is checked on the index filesystem. */
+void checks_index_filesystem_publication_space() {
+        const TemporaryDirectory temporary;
+        snowseek::index::builder_detail::BuildWorkspace workspace(
+                temporary.path(), std::numeric_limits<std::uint64_t>::max());
+        bool diagnosed = false;
+        try {
+                workspace.require_publication_staging(
+                        std::numeric_limits<std::uint64_t>::max(),
+                        temporary.path());
+        } catch (const std::runtime_error &error) {
+                diagnosed = std::string(error.what()).find(
+                                    "insufficient index filesystem space") !=
+                            std::string::npos;
+        }
+        snowseek::test::require(
+                diagnosed,
+                "publication staging should inspect destination capacity");
 }
 
 /** @brief Verifies bounded multi-level output matches a single-batch build. */
@@ -417,6 +457,8 @@ int main() {
                  counts_failed_document_buffers},
                 {"validates persistent resource options",
                  validates_persistent_resource_options},
+                {"checks index filesystem publication space",
+                 checks_index_filesystem_publication_space},
                 {"merges multiple levels byte for byte",
                  merges_multiple_levels_byte_for_byte},
                 {"enforces temporary space budget",

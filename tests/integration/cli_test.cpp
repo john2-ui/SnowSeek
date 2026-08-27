@@ -187,12 +187,17 @@ void parses_index_resource_options() {
         const auto source = temporary.path() / "source";
         const auto first_destination = temporary.path() / "first-index";
         const auto second_destination = temporary.path() / "second-index";
+        const auto workspace_parent = temporary.path() / "workspace";
+        const auto regular_file = temporary.path() / "regular-file";
         std::filesystem::create_directory(source);
+        std::filesystem::create_directory(workspace_parent);
         write_file(source / "a.txt", "alpha beta");
+        write_file(regular_file, "not a directory");
 
         const auto overridden = invoke_captured(
                 {"snowseek", "index", source.string(), "--threads", "2",
                  "--merge-fan-in", "2", "--temporary-space-limit", "1MiB",
+                 "--temporary-directory", workspace_parent.string(),
                  "--memory-limit", "1MiB", "--index",
                  first_destination.string(), "--profile", "minimal"});
         snowseek::test::require_equal(
@@ -250,6 +255,20 @@ void parses_index_resource_options() {
               {"snowseek", "index", source.string(), "--index",
                first_destination.string(), "--temporary-space-limit", "1MiB",
                "--temporary-space-limit", "2MiB"},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-directory",
+               workspace_parent.string(), "--temporary-directory",
+               workspace_parent.string()},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-directory", ""},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-directory",
+               (temporary.path() / "missing").string()},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-directory",
+               regular_file.string()},
+              {"snowseek", "index", source.string(), "--index",
+               first_destination.string(), "--temporary-directory"},
               {"snowseek", "index", source.string(), "--index",
                first_destination.string(), "--temporary-space-limit"},
               {"snowseek", "index", source.string(), "--merge-fan-in", "2"}}) {
@@ -348,7 +367,9 @@ void runs_incremental_maintenance_commands() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
         const auto destination = temporary.path() / "index";
+        const auto workspace_parent = temporary.path() / "workspace";
         std::filesystem::create_directory(source);
+        std::filesystem::create_directory(workspace_parent);
         write_file(source / "a.txt", "alpha");
         snowseek::test::require_equal(
                 invoke({"snowseek", "index", source.string(), "--index",
@@ -359,7 +380,8 @@ void runs_incremental_maintenance_commands() {
         write_file(source / "b.txt", "beta");
         const auto update = invoke_captured(
                 {"snowseek", "update", source.string(), "--threads", "2",
-                 "--index", destination.string(), "--profile", "minimal"});
+                 "--index", destination.string(), "--profile", "minimal",
+                 "--temporary-directory", workspace_parent.string()});
         require_output_keys(update, {"outcome", "revision", "segments", "added",
                                      "modified", "removed", "unchanged",
                                      "failed", "memory_peak_bytes",
@@ -384,7 +406,8 @@ void runs_incremental_maintenance_commands() {
 
         const auto removed = invoke_captured(
                 {"snowseek", "remove", destination.string(), "--path", "a.*",
-                 "--path", "a.*", "--memory-limit", "1MiB"});
+                 "--path", "a.*", "--memory-limit", "1MiB",
+                 "--temporary-directory", workspace_parent.string()});
         snowseek::test::require(
                 removed.status == 0 &&
                         removed.output.find("outcome=published\n") == 0 &&
@@ -402,7 +425,8 @@ void runs_incremental_maintenance_commands() {
 
         const auto compact =
                 invoke_captured({"snowseek", "compact", destination.string(),
-                                 "--threads", "3"});
+                                 "--threads", "3", "--temporary-directory",
+                                 workspace_parent.string()});
         snowseek::test::require(
                 compact.status == 0 &&
                         compact.output.find("outcome=compacted\n") == 0 &&

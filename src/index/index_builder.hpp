@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <limits>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -135,6 +136,8 @@ struct PersistentBuildOptions {
                 segment_flush_threshold_bytes{kDefaultSegmentFlushThresholdBytes}; ///< Flush cap.
         std::uint64_t
                 temporary_space_budget_bytes{kDefaultTemporarySpaceBudgetBytes}; ///< Workspace cap.
+        std::optional<std::filesystem::path>
+                temporary_directory; ///< Existing workspace parent, if overridden.
         std::size_t merge_fan_in{kDefaultMergeFanIn}; ///< Inputs per merge group.
         std::uint64_t memory_budget_bytes{kDefaultMemoryBudgetBytes}; ///< Logical byte limit.
         std::size_t worker_thread_count{kDefaultWorkerThreadCount}; ///< Concurrent parsers.
@@ -155,8 +158,8 @@ class IndexBuilder {
          * @param options Scanner, reader, tokenizer, and Segment batching
          * configuration.
          * @throws std::invalid_argument If a memory, temporary-space, flush, or
-         * worker limit is zero, fan-in is below two, or nested configuration
-         * is invalid.
+         * worker limit is zero, fan-in is below two, the temporary directory
+         * is not an existing directory, or nested configuration is invalid.
          */
         explicit IndexBuilder(PersistentBuildOptions options = {});
 

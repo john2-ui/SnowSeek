@@ -118,7 +118,7 @@ class BuildWorkspace {
       public:
         /**
          * @brief Creates a unique private build directory below a destination.
-         * @param parent Existing index directory that owns the workspace.
+         * @param parent Existing directory that owns the workspace.
          * @param budget_bytes Maximum logical bytes retained in the workspace.
          * @throws std::system_error If Linux cannot create the workspace.
          */
@@ -151,6 +151,19 @@ class BuildWorkspace {
          * insufficient.
          */
         void require_additional(std::uint64_t bytes) const;
+
+        /**
+         * @brief Checks the logical budget and destination filesystem before
+         * publication staging.
+         * @param bytes Candidate-copy and Manifest bytes that will coexist with
+         * retained workspace files.
+         * @param index_directory Existing destination directory to inspect.
+         * @throws std::runtime_error If the shared budget or destination
+         * filesystem capacity is insufficient.
+         */
+        void require_publication_staging(
+                std::uint64_t bytes,
+                const std::filesystem::path &index_directory) const;
 
         /**
          * @brief Accounts for one completed file retained by the workspace.
@@ -307,6 +320,8 @@ void finalize_memory_stats(const std::vector<std::filesystem::path> &scan_paths,
  * @param candidate Valid complete candidate file.
  * @param active_segments Manifest SegmentIds selected after commit.
  * @param workspace Workspace accounting candidate and Manifest staging.
+ * @param stage_in_index_directory Whether to copy the candidate into a unique
+ * index-directory staging file before publication.
  * @param memory_budget Classified memory budget for Manifest bytes.
  * @param result Operation result populated with publication diagnostics.
  * @throws std::runtime_error If validation, budget checks, or publication fail.
@@ -315,6 +330,7 @@ void publish_candidate(storage::detail::IndexDirectoryTransaction &publication,
                        const std::filesystem::path &candidate,
                        std::vector<storage::SegmentId> active_segments,
                        BuildWorkspace &workspace,
+                       bool stage_in_index_directory,
                        BuildMemoryBudget &memory_budget,
                        PersistentBuildResult &result);
 

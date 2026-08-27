@@ -48,6 +48,7 @@ internal_options(const IndexOptions &options) {
                 resolved.temporary_space_budget_bytes =
                         *options.temporary_space_limit_bytes;
         }
+        resolved.temporary_directory = options.temporary_directory;
         if (options.worker_threads.has_value()) {
                 resolved.worker_thread_count = *options.worker_threads;
         }

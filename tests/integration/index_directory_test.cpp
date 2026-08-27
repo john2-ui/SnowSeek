@@ -66,6 +66,7 @@ void publishes_generations_and_recovers_owned_orphans() {
         write_bytes(orphan, "orphan");
         std::filesystem::create_directory(index / ".snowseek-build-leftover");
         write_bytes(index / ".snowseek-manifest-leftover", "temporary");
+        write_bytes(index / ".snowseek-segment-leftover", "temporary");
         const auto third = snowseek::index::IndexBuilder{}.build(source, index);
         snowseek::test::require_equal(
                 third.segment_id, snowseek::storage::SegmentId{100},
@@ -77,8 +78,46 @@ void publishes_generations_and_recovers_owned_orphans() {
                         !std::filesystem::exists(index /
                                                  ".snowseek-build-leftover") &&
                         !std::filesystem::exists(index /
+                                                 ".snowseek-segment-leftover") &&
+                        !std::filesystem::exists(index /
                                                  ".snowseek-manifest-leftover"),
                 "recovery should remove recognized leftovers");
+}
+
+/** @brief Verifies a failed external copy removes its local staging file. */
+void cleans_failed_candidate_copy() {
+        const TemporaryDirectory temporary("index-directory-publication");
+        const auto source = temporary.path() / "source";
+        const auto index = temporary.path() / "index";
+        std::filesystem::create_directory(source);
+        write_bytes(source / "document.txt", "content");
+        const auto built =
+                snowseek::index::IndexBuilder{}.build(source, index);
+
+        {
+                snowseek::storage::detail::IndexDirectoryTransaction transaction(
+                        index);
+                snowseek::test::require_throws<std::runtime_error>(
+                        [&transaction, &temporary] {
+                                static_cast<void>(transaction.stage_candidate(
+                                        temporary.path() / "missing.idx"));
+                        },
+                        "copying a missing candidate should fail");
+                for (const auto &entry :
+                     std::filesystem::directory_iterator(index)) {
+                        snowseek::test::require(
+                                !entry.path().filename().string().starts_with(
+                                        ".snowseek-segment-"),
+                                "a failed copy should remove its staging file");
+                }
+        }
+
+        snowseek::test::require_equal(
+                snowseek::storage::read_manifest_file(
+                        index / snowseek::storage::kManifestFileName)
+                        .generation,
+                built.manifest_generation,
+                "a failed copy should preserve the visible generation");
 }
 
 /** @brief Verifies an M4 fixed Segment migrates as logical SegmentId 1. */
@@ -225,10 +264,14 @@ void survives_each_publication_interruption() {
                         "index-directory-publication");
                 const auto source = temporary.path() / "source";
                 const auto index = temporary.path() / "index";
+                const auto workspace_parent = temporary.path() / "workspace";
                 std::filesystem::create_directory(source);
+                std::filesystem::create_directory(workspace_parent);
                 write_bytes(source / "document.txt", "before");
-                static_cast<void>(
-                        snowseek::index::IndexBuilder{}.build(source, index));
+                snowseek::index::PersistentBuildOptions options;
+                options.temporary_directory = workspace_parent;
+                const snowseek::index::IndexBuilder builder(options);
+                static_cast<void>(builder.build(source, index));
                 write_bytes(source / "document.txt", "after");
 
                 crash_point = points[point_index];
@@ -239,8 +282,7 @@ void survives_each_publication_interruption() {
                         throw std::runtime_error("failed to fork fault test");
                 }
                 if (child == 0) {
-                        static_cast<void>(snowseek::index::IndexBuilder{}.build(
-                                source, index));
+                        static_cast<void>(builder.build(source, index));
                         ::_exit(0);
                 }
                 int status = 0;
@@ -257,8 +299,7 @@ void survives_each_publication_interruption() {
                         "an interruption should expose a complete old or new "
                         "generation");
 
-                const auto recovered =
-                        snowseek::index::IndexBuilder{}.build(source, index);
+                const auto recovered = builder.build(source, index);
                 snowseek::test::require(
                         recovered.cleanup_errors.empty() &&
                                 snowseek::storage::validate_index_directory(
@@ -353,6 +394,7 @@ int main() {
         return snowseek::test::run({
                 {"publishes generations and recovers owned orphans",
                  publishes_generations_and_recovers_owned_orphans},
+                {"cleans failed candidate copy", cleans_failed_candidate_copy},
                 {"migrates legacy index", migrates_legacy_index},
                 {"preserves legacy Segment until Manifest commit",
                  preserves_legacy_segment_until_manifest_commit},

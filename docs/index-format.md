@@ -179,19 +179,28 @@ BM25 使用最终可见文档数和过滤后的 document frequency。
 
 Linux writer 在索引目录 fd 上持有独占 `flock`，按以下顺序发布：
 
-1. 完整验证并 `fsync` 候选 Segment；
-2. rename 为最终 Segment 文件并 `fsync` 目录；
-3. 创建同目录 Manifest 临时文件，写入、`fsync` 并重读验证；
-4. 原子 rename 为 `MANIFEST`；
-5. 再次 `fsync` 目录；
-6. 删除 `old_active - new_active` 并同步目录。
+1. 完整验证工作区候选 Segment；
+2. 若配置了外部临时目录，检查索引文件系统空间，将候选复制为同目录
+   `.snowseek-segment-*` 暂存文件并重新完整验证；
+3. `fsync` 可发布候选，rename 为最终 Segment 文件并 `fsync` 目录；
+4. 创建同目录 Manifest 临时文件，写入、`fsync` 并重读验证；
+5. 原子 rename 为 `MANIFEST`；
+6. 再次 `fsync` 目录；
+7. 删除 `old_active - new_active` 并同步目录。
 
 Manifest rename 是唯一逻辑提交点。提交前失败继续选择旧 generation；提交后同步或
-清理失败保留旧 Segment 并返回诊断。
+清理失败保留旧 Segment 并返回诊断。显式配置临时目录后，即使两个目录实际位于同一
+文件系统也始终执行回拷，使跨文件系统与同文件系统使用同一发布路径。
 
-下一次 writer 只清理可识别的 `.snowseek-build-*`、`.snowseek-manifest-*` 和未被
-Manifest 引用的合法 Segment 文件，未知文件保持不动。残留合法 Segment 的最大 ID
-参与下一 ID 计算，避免崩溃后复用标识符。
+临时空间逻辑预算在发布窗口同时计入外部候选、索引目录候选副本和 Manifest。工作区
+写入使用临时文件系统的可用空间，回拷前另行检查索引文件系统能否容纳候选副本和
+Manifest；逻辑字节预算与文件系统块配额是两个独立约束。
+
+下一次 writer 只清理索引目录内可识别的 `.snowseek-build-*`、
+`.snowseek-segment-*`、`.snowseek-manifest-*` 和未被 Manifest 引用的合法 Segment
+文件，未知文件保持不动。残留合法 Segment 的最大 ID 参与下一 ID 计算，避免崩溃后
+复用标识符。正常退出会删除外部工作区；进程崩溃遗留在共享外部临时目录的
+`.snowseek-build-*` 不自动清理，避免误删其他索引正在使用的工作区。
 
 ## 兼容性
 

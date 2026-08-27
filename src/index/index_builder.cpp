@@ -47,6 +47,16 @@ IndexBuilder::IndexBuilder(PersistentBuildOptions options)
                 throw std::invalid_argument(
                         "temporary space budget must be positive");
         }
+        if (options_.temporary_directory.has_value()) {
+                std::error_code error;
+                const bool is_directory = std::filesystem::is_directory(
+                        *options_.temporary_directory, error);
+                if (error || !is_directory) {
+                        throw std::invalid_argument(
+                                "temporary directory must be an existing directory: " +
+                                options_.temporary_directory->string());
+                }
+        }
         if (options_.merge_fan_in < 2) {
                 throw std::invalid_argument(
                         "merge fan-in must be at least two");

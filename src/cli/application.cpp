@@ -66,6 +66,8 @@ void print_help() {
                   << "  snowseek query <index> <expression> [options]\n"
                   << "  snowseek stats|verify <index>\n";
         std::cout << "\nIndex options:\n"
+                  << "  --temporary-directory <dir>   Place build workspace "
+                     "in existing dir\n"
                   << "  --temporary-space-limit <size>  Limit private build "
                      "bytes\n"
                   << "  --memory-limit <size>           Limit classified build "
@@ -206,7 +208,8 @@ struct ResourceParseState {
  */
 bool consume_resource_option(std::string_view option, int &argument, int argc,
                              char *argv[], ResourceParseState &state) {
-        const bool recognized = option == "--temporary-space-limit" ||
+        const bool recognized = option == "--temporary-directory" ||
+                                option == "--temporary-space-limit" ||
                                 option == "--merge-fan-in" ||
                                 option == "--memory-limit" ||
                                 option == "--threads" || option == "--profile";
@@ -217,7 +220,10 @@ bool consume_resource_option(std::string_view option, int &argument, int argc,
                 throw std::invalid_argument(std::string(option) +
                                             " requires a value");
         }
-        if (option == "--temporary-space-limit" &&
+        if (option == "--temporary-directory" &&
+            !state.options.temporary_directory.has_value()) {
+                state.options.temporary_directory = argv[++argument];
+        } else if (option == "--temporary-space-limit" &&
             !state.options.temporary_space_limit_bytes.has_value()) {
                 state.options.temporary_space_limit_bytes =
                         parse_byte_size(argv[++argument]);

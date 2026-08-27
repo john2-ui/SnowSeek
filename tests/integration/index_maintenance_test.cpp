@@ -26,12 +26,20 @@ void updates_removes_and_compacts_multiple_segments() {
         const TemporaryDirectory temporary;
         const auto source = temporary.path() / "source";
         const auto destination = temporary.path() / "index";
+        const auto workspace_parent = temporary.path() / "workspace";
         std::filesystem::create_directory(source);
+        std::filesystem::create_directory(workspace_parent);
         write_file(source / "a.txt", "alpha");
         write_file(source / "b.txt", "beta");
 
-        const snowseek::index::IndexBuilder builder;
+        snowseek::index::PersistentBuildOptions options;
+        options.temporary_directory = workspace_parent;
+        const snowseek::index::IndexBuilder builder(options);
         const auto initial = builder.build(source, destination);
+        snowseek::test::require(
+                initial.temporary_peak_bytes >=
+                        2 * std::filesystem::file_size(initial.index_file),
+                "external publication should account for both Segment copies");
         const auto unchanged = builder.update(source, destination);
         snowseek::test::require(
                 !unchanged.published && unchanged.segment_id == 0 &&
@@ -130,6 +138,10 @@ void updates_removes_and_compacts_multiple_segments() {
         snowseek::test::require(
                 !canonical.published && canonical.segment_id == 0,
                 "compacting an already canonical Segment should be a no-op");
+        snowseek::test::require(
+                std::filesystem::directory_iterator(workspace_parent) ==
+                        std::filesystem::directory_iterator{},
+                "normal maintenance should remove every external workspace");
 }
 
 /** @brief Verifies the seventeenth active Segment triggers soft compaction. */
