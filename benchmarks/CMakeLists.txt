@@ -12,4 +12,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
                                PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_features(snowseek_index_builder_benchmark PRIVATE cxx_std_20)
     snowseek_enable_warnings(snowseek_index_builder_benchmark)
+    if(SNOWSEEK_BUILD_TESTS)
+        add_test(NAME snowseek.index_builder_benchmark_smoke
+            COMMAND snowseek_index_builder_benchmark
+                --files 2
+                --bytes-per-file 1024
+                --vocabulary 16
+                --samples 2
+                --changed-files 1)
+    endif()
 endif()

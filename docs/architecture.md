@@ -141,11 +141,9 @@ cmake --build build
 按优先级推进：
 
 1. 在 AArch64 设备复测 RSS、构建吞吐、查询延迟和跨架构索引兼容性。
-2. 为完整构建、增量更新和压缩建立统一的冷/热缓存基准，记录体积、吞吐、
-   P50/P95/P99 和写放大。
-3. 基于实测评估 Posting/Position 的 Delta + Varint、Skip/Galloping Search，以及
+2. 基于实测评估 Posting/Position 的 Delta + Varint、Skip/Galloping Search，以及
    `pread` 与 `mmap`；需要改变磁盘字节时使用新格式版本，不修改 v2 契约。
-4. 可选增加轻量 C/C++ Lexer 和 `symbol:`、`comment:` 字段；解析失败必须安全
+3. 可选增加轻量 C/C++ Lexer 和 `symbol:`、`comment:` 字段；解析失败必须安全
    降级为普通文本索引。
 
 每项性能优化都应附带可复现的前后数据；没有测量收益时保持现有实现。

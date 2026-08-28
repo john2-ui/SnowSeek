@@ -118,7 +118,18 @@ Segment 的物理计数。现有 Segment v2 + Manifest v1 字节保持兼容。
 可通过 `SNOWSEEK_BUILD_JOBS` 调整并行任务数，通过 `SNOWSEEK_BUILD_ROOT`
 指定构建产物目录。
 
-可选的确定性索引基准、参数和当前实测见
+Linux 上可启用统一维护基准，测量完整构建、增量更新和压缩的冷/热文件缓存延迟、
+吞吐、索引体积和写放大：
+
+```bash
+cmake -S . -B build-benchmark -DCMAKE_BUILD_TYPE=Release \
+  -DSNOWSEEK_BUILD_BENCHMARKS=ON
+cmake --build build-benchmark --parallel 2
+./build-benchmark/benchmarks/snowseek_index_builder_benchmark
+./build-benchmark/benchmarks/snowseek_index_builder_benchmark --samples 100
+```
+
+缓存定义、统计口径、参数和当前实测见
 [docs/memory-baseline.md](docs/memory-baseline.md)。
 Manifest v1 与 Segment v2 的统一磁盘契约见
 [docs/index-format.md](docs/index-format.md)。
