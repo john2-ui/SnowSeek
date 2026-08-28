@@ -106,3 +106,16 @@ update.cold.write_amplification=...
 
 本次进程生命周期 RSS 峰值为 `476319744` bytes。10 个样本下 P95 与 P99 都取最大
 样本；表中冷、热差异也可能包含运行顺序和系统负载噪声，不能据此建立跨机器阈值。
+
+## CPU 火焰图
+
+项目根目录保留同一 64 MiB 语料下的全线程 CPU 火焰图。采集使用带调试符号和 frame
+pointer 的 `RelWithDebInfo` 构建，通过 `perf record -e cycles:u -c 1000000 -g
+--call-graph fp` 使用固定周期采样；缓存准备不进入采样窗口。火焰图只表示进程的
+on-CPU 时间，不表示 I/O 等待时间，也不能直接与其他机器比较。
+
+| 操作 | 冷缓存 | 热缓存 |
+|---|---|---|
+| rebuild | [cold](../snowseek-rebuild-cold-flamegraph.svg) | [hot](../snowseek-rebuild-hot-flamegraph.svg) |
+| update | [cold](../snowseek-update-cold-flamegraph.svg) | [hot](../snowseek-update-hot-flamegraph.svg) |
+| compact | [cold](../snowseek-compact-cold-flamegraph.svg) | [hot](../snowseek-compact-hot-flamegraph.svg) |

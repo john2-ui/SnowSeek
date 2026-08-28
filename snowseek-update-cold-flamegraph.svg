@@ -1,0 +1,1323 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="350" onload="init(evt)" viewBox="0 0 1200 350" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="350.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >SnowSeek update cold</text>
+<text id="subtitle" x="600.00" y="48" >64 MiB corpus, all threads, cycles:u, fixed 1M-cycle period</text>
+<text id="details" x="10.00" y="333" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="333" > </text>
+<g id="frames">
+<g >
+<title>__libc_read (9,000,000 cpu-cycles, 0.08%)</title><rect x="10.9" y="253" width="1.0" height="15.0" fill="rgb(241,154,40)" rx="2" ry="2" />
+<text  x="13.94" y="263.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt;::_M_realloc_insert&lt;snowseek::index::Posting&gt; (5,000,000 cpu-cycles, 0.04%)</title><rect x="1186.1" y="253" width="0.5" height="15.0" fill="rgb(245,146,44)" rx="2" ry="2" />
+<text  x="1189.13" y="263.5" ></text>
+</g>
+<g >
+<title>[unknown] (11,000,000 cpu-cycles, 0.10%)</title><rect x="1156.3" y="253" width="1.1" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1159.29" y="263.5" ></text>
+</g>
+<g >
+<title>operator new (8,000,000 cpu-cycles, 0.07%)</title><rect x="534.5" y="141" width="0.8" height="15.0" fill="rgb(235,195,33)" rx="2" ry="2" />
+<text  x="537.46" y="151.5" ></text>
+</g>
+<g >
+<title>_dl_sysdep_start (1,000,000 cpu-cycles, 0.01%)</title><rect x="12.0" y="253" width="0.1" height="15.0" fill="rgb(239,184,37)" rx="2" ry="2" />
+<text  x="14.99" y="263.5" ></text>
+</g>
+<g >
+<title>std::istream::get (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.9" y="125" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="147.86" y="135.5" ></text>
+</g>
+<g >
+<title>[snowseek] (33,000,000 cpu-cycles, 0.29%)</title><rect x="1011.3" y="109" width="3.4" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="1014.27" y="119.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.2" y="157" width="0.1" height="15.0" fill="rgb(235,151,33)" rx="2" ry="2" />
+<text  x="149.22" y="167.5" ></text>
+</g>
+<g >
+<title>malloc_consolidate (74,000,000 cpu-cycles, 0.66%)</title><rect x="1178.3" y="269" width="7.7" height="15.0" fill="rgb(245,112,45)" rx="2" ry="2" />
+<text  x="1181.27" y="279.5" ></text>
+</g>
+<g >
+<title>_int_free (22,000,000 cpu-cycles, 0.20%)</title><rect x="203.7" y="189" width="2.3" height="15.0" fill="rgb(246,153,46)" rx="2" ry="2" />
+<text  x="206.70" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::add_posting (10,000,000 cpu-cycles, 0.09%)</title><rect x="518.6" y="157" width="1.1" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="521.65" y="167.5" ></text>
+</g>
+<g >
+<title>__pthread_mutex_unlock (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="109" width="0.1" height="15.0" fill="rgb(240,141,39)" rx="2" ry="2" />
+<text  x="14.88" y="119.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (22,000,000 cpu-cycles, 0.20%)</title><rect x="833.6" y="141" width="2.3" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="836.59" y="151.5" ></text>
+</g>
+<g >
+<title>std::istream::get (425,000,000 cpu-cycles, 3.77%)</title><rect x="733.9" y="125" width="44.5" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="736.91" y="135.5" >std:..</text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="524.3" y="93" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="527.30" y="103.5" ></text>
+</g>
+<g >
+<title>[snowseek] (75,000,000 cpu-cycles, 0.67%)</title><rect x="907.4" y="109" width="7.9" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="910.41" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (555,000,000 cpu-cycles, 4.92%)</title><rect x="998.4" y="125" width="58.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="1001.39" y="135.5" >snowse..</text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.1" y="237" width="0.1" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="13.10" y="247.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (2,000,000 cpu-cycles, 0.02%)</title><rect x="533.3" y="141" width="0.2" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="536.30" y="151.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.1" y="157" width="0.1" height="15.0" fill="rgb(250,146,49)" rx="2" ry="2" />
+<text  x="149.11" y="167.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt;::_M_realloc_insert&lt;snowseek::index::Posting&gt; (44,000,000 cpu-cycles, 0.39%)</title><rect x="550.0" y="109" width="4.6" height="15.0" fill="rgb(245,146,44)" rx="2" ry="2" />
+<text  x="552.95" y="119.5" ></text>
+</g>
+<g >
+<title>[unknown] (7,000,000 cpu-cycles, 0.06%)</title><rect x="10.1" y="253" width="0.7" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="13.10" y="263.5" ></text>
+</g>
+<g >
+<title>std::ostream::put (2,000,000 cpu-cycles, 0.02%)</title><rect x="10.6" y="237" width="0.2" height="15.0" fill="rgb(234,146,31)" rx="2" ry="2" />
+<text  x="13.63" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::detail::write_index_file_bounded (5,000,000 cpu-cycles, 0.04%)</title><rect x="146.0" y="189" width="0.5" height="15.0" fill="rgb(250,180,49)" rx="2" ry="2" />
+<text  x="149.01" y="199.5" ></text>
+</g>
+<g >
+<title>std::__future_base::_State_baseV2::_M_do_set (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="237" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="14.88" y="247.5" ></text>
+</g>
+<g >
+<title>[snowseek] (2,000,000 cpu-cycles, 0.02%)</title><rect x="869.6" y="125" width="0.2" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="872.61" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::filesystem::Scanner::scan (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.1" y="205" width="0.1" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="147.12" y="215.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe (40,000,000 cpu-cycles, 0.35%)</title><rect x="564.6" y="109" width="4.2" height="15.0" fill="rgb(235,151,33)" rx="2" ry="2" />
+<text  x="567.61" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (761,000,000 cpu-cycles, 6.75%)</title><rect x="605.4" y="125" width="79.7" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="608.44" y="135.5" >snowseek:..</text>
+</g>
+<g >
+<title>std::basic_filebuf&lt;char, std::char_traits&lt;char&gt; &gt;::_M_seek (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.5" y="221" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="35.51" y="231.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (2,000,000 cpu-cycles, 0.02%)</title><rect x="144.8" y="141" width="0.2" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="147.75" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (137,000,000 cpu-cycles, 1.22%)</title><rect x="471.1" y="157" width="14.4" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="474.11" y="167.5" ></text>
+</g>
+<g >
+<title>[unknown] (9,000,000 cpu-cycles, 0.08%)</title><rect x="10.9" y="237" width="1.0" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="13.94" y="247.5" ></text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::has_root_directory (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.4" y="237" width="0.1" height="15.0" fill="rgb(246,146,45)" rx="2" ry="2" />
+<text  x="13.42" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::analysis::TokenizerSession::emit_pending (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="141" width="0.1" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="14.88" y="151.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (1,000,000 cpu-cycles, 0.01%)</title><rect x="523.9" y="125" width="0.1" height="15.0" fill="rgb(250,146,49)" rx="2" ry="2" />
+<text  x="526.88" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (203,000,000 cpu-cycles, 1.80%)</title><rect x="371.5" y="157" width="21.3" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="374.54" y="167.5" >s..</text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.3" y="157" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="149.32" y="167.5" ></text>
+</g>
+<g >
+<title>all (11,270,000,000 cpu-cycles, 100%)</title><rect x="10.0" y="301" width="1180.0" height="15.0" fill="rgb(255,230,55)" rx="2" ry="2" />
+<text  x="13.00" y="311.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (118,000,000 cpu-cycles, 1.05%)</title><rect x="1014.7" y="109" width="12.4" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="1017.73" y="119.5" ></text>
+</g>
+<g >
+<title>std::basic_filebuf&lt;char, std::char_traits&lt;char&gt; &gt;::underflow (1,000,000 cpu-cycles, 0.01%)</title><rect x="1027.1" y="109" width="0.1" height="15.0" fill="rgb(238,146,36)" rx="2" ry="2" />
+<text  x="1030.08" y="119.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (3,000,000 cpu-cycles, 0.03%)</title><rect x="869.3" y="125" width="0.3" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="872.30" y="135.5" ></text>
+</g>
+<g >
+<title>std::istream::get (1,000,000 cpu-cycles, 0.01%)</title><rect x="244.6" y="141" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="247.64" y="151.5" ></text>
+</g>
+<g >
+<title>_IO_link_in (1,000,000 cpu-cycles, 0.01%)</title><rect x="139.2" y="269" width="0.1" height="15.0" fill="rgb(240,132,39)" rx="2" ry="2" />
+<text  x="142.20" y="279.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (7,000,000 cpu-cycles, 0.06%)</title><rect x="1143.9" y="157" width="0.8" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="1146.93" y="167.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe (1,000,000 cpu-cycles, 0.01%)</title><rect x="524.2" y="109" width="0.1" height="15.0" fill="rgb(235,151,33)" rx="2" ry="2" />
+<text  x="527.20" y="119.5" ></text>
+</g>
+<g >
+<title>__memset_avx2_erms (1,000,000 cpu-cycles, 0.01%)</title><rect x="140.9" y="205" width="0.1" height="15.0" fill="rgb(231,151,28)" rx="2" ry="2" />
+<text  x="143.88" y="215.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (28,000,000 cpu-cycles, 0.25%)</title><rect x="579.6" y="109" width="2.9" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="582.58" y="119.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (90,000,000 cpu-cycles, 0.80%)</title><rect x="570.2" y="109" width="9.4" height="15.0" fill="rgb(250,146,49)" rx="2" ry="2" />
+<text  x="573.16" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (166,000,000 cpu-cycles, 1.47%)</title><rect x="588.1" y="141" width="17.3" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="591.06" y="151.5" ></text>
+</g>
+<g >
+<title>[snowseek] (1,000,000 cpu-cycles, 0.01%)</title><rect x="145.4" y="141" width="0.1" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="148.38" y="151.5" ></text>
+</g>
+<g >
+<title>[snowseek] (5,000,000 cpu-cycles, 0.04%)</title><rect x="242.5" y="173" width="0.6" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="245.54" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::validate_index_file (7,000,000 cpu-cycles, 0.06%)</title><rect x="144.4" y="157" width="0.8" height="15.0" fill="rgb(237,180,35)" rx="2" ry="2" />
+<text  x="147.44" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::crc32c (2,000,000 cpu-cycles, 0.02%)</title><rect x="145.8" y="189" width="0.2" height="15.0" fill="rgb(230,180,28)" rx="2" ry="2" />
+<text  x="148.80" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::detail::IndexDirectoryTransaction::publish (8,000,000 cpu-cycles, 0.07%)</title><rect x="144.3" y="173" width="0.9" height="15.0" fill="rgb(236,180,34)" rx="2" ry="2" />
+<text  x="147.33" y="183.5" ></text>
+</g>
+<g >
+<title>[snowseek] (37,000,000 cpu-cycles, 0.33%)</title><rect x="790.9" y="125" width="3.8" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="793.87" y="135.5" ></text>
+</g>
+<g >
+<title>std::istream::read (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.8" y="253" width="0.1" height="15.0" fill="rgb(241,146,40)" rx="2" ry="2" />
+<text  x="35.83" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_validated_header (761,000,000 cpu-cycles, 6.75%)</title><rect x="1058.0" y="141" width="79.6" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="1060.97" y="151.5" >snowseek:..</text>
+</g>
+<g >
+<title>snowseek::index::builder_detail::parse_document (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="205" width="0.1" height="15.0" fill="rgb(241,180,39)" rx="2" ry="2" />
+<text  x="14.88" y="215.5" ></text>
+</g>
+<g >
+<title>cfree@GLIBC_2.2.5 (11,000,000 cpu-cycles, 0.10%)</title><rect x="206.0" y="189" width="1.2" height="15.0" fill="rgb(246,123,45)" rx="2" ry="2" />
+<text  x="209.00" y="199.5" ></text>
+</g>
+<g >
+<title>[snowseek] (73,000,000 cpu-cycles, 0.65%)</title><rect x="708.5" y="125" width="7.6" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="711.47" y="135.5" ></text>
+</g>
+<g >
+<title>cfree@GLIBC_2.2.5 (20,000,000 cpu-cycles, 0.18%)</title><rect x="142.0" y="205" width="2.1" height="15.0" fill="rgb(246,123,45)" rx="2" ry="2" />
+<text  x="145.03" y="215.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="524.3" y="109" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="527.30" y="119.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (83,000,000 cpu-cycles, 0.74%)</title><rect x="1002.6" y="109" width="8.7" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="1005.58" y="119.5" ></text>
+</g>
+<g >
+<title>__libc_start_main (9,619,000,000 cpu-cycles, 85.35%)</title><rect x="139.7" y="269" width="1007.2" height="15.0" fill="rgb(247,154,46)" rx="2" ry="2" />
+<text  x="142.73" y="279.5" >__libc_start_main</text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::_M_split_cmpts (1,000,000 cpu-cycles, 0.01%)</title><rect x="1186.0" y="269" width="0.1" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="1189.02" y="279.5" ></text>
+</g>
+<g >
+<title>unlink_chunk.isra.0 (29,000,000 cpu-cycles, 0.26%)</title><rect x="1187.0" y="269" width="3.0" height="15.0" fill="rgb(238,173,36)" rx="2" ry="2" />
+<text  x="1189.96" y="279.5" ></text>
+</g>
+<g >
+<title>snowseek::document::(anonymous namespace)::emit_valid_utf8 (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="173" width="0.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="14.88" y="183.5" ></text>
+</g>
+<g >
+<title>__libc_lseek64 (4,000,000 cpu-cycles, 0.04%)</title><rect x="139.3" y="269" width="0.4" height="15.0" fill="rgb(232,154,30)" rx="2" ry="2" />
+<text  x="142.31" y="279.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::filesystem::__cxx11::path*, std::vector&lt;std::filesystem::__cxx11::path, std::allocator&lt;std::filesystem::__cxx11::path&gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.1" y="189" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="147.12" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::decode_document_table (2,000,000 cpu-cycles, 0.02%)</title><rect x="244.5" y="173" width="0.2" height="15.0" fill="rgb(241,180,40)" rx="2" ry="2" />
+<text  x="247.53" y="183.5" ></text>
+</g>
+<g >
+<title>std::istream::get (1,000,000 cpu-cycles, 0.01%)</title><rect x="145.6" y="141" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="148.59" y="151.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (17,000,000 cpu-cycles, 0.15%)</title><rect x="516.8" y="173" width="1.7" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="519.76" y="183.5" ></text>
+</g>
+<g >
+<title>dl_main (1,000,000 cpu-cycles, 0.01%)</title><rect x="12.0" y="237" width="0.1" height="15.0" fill="rgb(247,149,46)" rx="2" ry="2" />
+<text  x="14.99" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (1,000,000 cpu-cycles, 0.01%)</title><rect x="1143.7" y="157" width="0.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="1146.72" y="167.5" ></text>
+</g>
+<g >
+<title>[snowseek] (4,000,000 cpu-cycles, 0.04%)</title><rect x="203.3" y="189" width="0.4" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="206.28" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_index_directory (5,979,000,000 cpu-cycles, 53.05%)</title><rect x="518.6" y="205" width="626.1" height="15.0" fill="rgb(246,180,45)" rx="2" ry="2" />
+<text  x="521.65" y="215.5" >snowseek::storage::read_index_directory</text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (1,104,000,000 cpu-cycles, 9.80%)</title><rect x="339.2" y="173" width="115.6" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="342.19" y="183.5" >snowseek::stor..</text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (3,000,000 cpu-cycles, 0.03%)</title><rect x="1140.7" y="141" width="0.3" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="1143.69" y="151.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::~_Hashtable (20,000,000 cpu-cycles, 0.18%)</title><rect x="1144.8" y="205" width="2.1" height="15.0" fill="rgb(241,146,40)" rx="2" ry="2" />
+<text  x="1147.77" y="215.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (2,000,000 cpu-cycles, 0.02%)</title><rect x="145.0" y="141" width="0.2" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="147.96" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (519,000,000 cpu-cycles, 4.61%)</title><rect x="779.3" y="141" width="54.3" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="782.25" y="151.5" >snows..</text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (9,000,000 cpu-cycles, 0.08%)</title><rect x="1141.0" y="141" width="0.9" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="1144.00" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::index::(anonymous namespace)::publish_delta (22,000,000 cpu-cycles, 0.20%)</title><rect x="144.2" y="205" width="2.3" height="15.0" fill="rgb(236,180,34)" rx="2" ry="2" />
+<text  x="147.23" y="215.5" ></text>
+</g>
+<g >
+<title>[snowseek] (3,000,000 cpu-cycles, 0.03%)</title><rect x="539.0" y="125" width="0.3" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="541.96" y="135.5" ></text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::compare (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.3" y="237" width="0.1" height="15.0" fill="rgb(248,146,47)" rx="2" ry="2" />
+<text  x="13.31" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::append_posting (146,000,000 cpu-cycles, 1.30%)</title><rect x="539.3" y="125" width="15.3" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="542.27" y="135.5" ></text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (6,000,000 cpu-cycles, 0.05%)</title><rect x="454.1" y="157" width="0.7" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="457.15" y="167.5" ></text>
+</g>
+<g >
+<title>[unknown] (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.4" y="189" width="0.1" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="35.41" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::sorted_terms[abi:cxx11] (2,000,000 cpu-cycles, 0.02%)</title><rect x="146.2" y="173" width="0.2" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="149.22" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::add_posting (498,000,000 cpu-cycles, 4.42%)</title><rect x="535.3" y="141" width="52.1" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="538.29" y="151.5" >snows..</text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (7,000,000 cpu-cycles, 0.06%)</title><rect x="241.8" y="173" width="0.7" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="244.81" y="183.5" ></text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::root_name (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.5" y="237" width="0.1" height="15.0" fill="rgb(241,146,40)" rx="2" ry="2" />
+<text  x="13.52" y="247.5" ></text>
+</g>
+<g >
+<title>std::_Function_handler&lt;void  (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="125" width="0.1" height="15.0" fill="rgb(244,146,43)" rx="2" ry="2" />
+<text  x="14.88" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::IndexWriter::update (9,619,000,000 cpu-cycles, 85.35%)</title><rect x="139.7" y="237" width="1007.2" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="142.73" y="247.5" >snowseek::IndexWriter::update</text>
+</g>
+<g >
+<title>[unknown] (1,234,000,000 cpu-cycles, 10.95%)</title><rect x="10.0" y="269" width="129.2" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="13.00" y="279.5" >[unknown]</text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::find (1,000,000 cpu-cycles, 0.01%)</title><rect x="523.9" y="141" width="0.1" height="15.0" fill="rgb(248,180,48)" rx="2" ry="2" />
+<text  x="526.88" y="151.5" ></text>
+</g>
+<g >
+<title>__pthread_once_slow (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="253" width="0.1" height="15.0" fill="rgb(238,141,36)" rx="2" ry="2" />
+<text  x="14.88" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_validated_header (2,000,000 cpu-cycles, 0.02%)</title><rect x="145.2" y="157" width="0.2" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="148.17" y="167.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (132,000,000 cpu-cycles, 1.17%)</title><rect x="694.7" y="125" width="13.8" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="697.65" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::detail::load_document_table (2,923,000,000 cpu-cycles, 25.94%)</title><rect x="835.9" y="157" width="306.0" height="15.0" fill="rgb(241,180,40)" rx="2" ry="2" />
+<text  x="838.90" y="167.5" >snowseek::storage::detail::load_document_..</text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (3,000,000 cpu-cycles, 0.03%)</title><rect x="145.4" y="157" width="0.3" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="148.38" y="167.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (14,000,000 cpu-cycles, 0.12%)</title><rect x="585.8" y="125" width="1.4" height="15.0" fill="rgb(250,146,49)" rx="2" ry="2" />
+<text  x="588.76" y="135.5" ></text>
+</g>
+<g >
+<title>[snowseek] (10,000,000 cpu-cycles, 0.09%)</title><rect x="139.8" y="205" width="1.1" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="142.83" y="215.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.0" y="253" width="0.1" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="13.00" y="263.5" ></text>
+</g>
+<g >
+<title>[snowseek] (75,000,000 cpu-cycles, 0.67%)</title><rect x="363.7" y="157" width="7.8" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="366.69" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (115,000,000 cpu-cycles, 1.02%)</title><rect x="794.7" y="125" width="12.1" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="797.75" y="135.5" ></text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (3,000,000 cpu-cycles, 0.03%)</title><rect x="833.3" y="125" width="0.3" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="836.28" y="135.5" ></text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::_M_append (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.7" y="253" width="0.1" height="15.0" fill="rgb(251,146,51)" rx="2" ry="2" />
+<text  x="35.72" y="263.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Map_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, snowseek::storage::(anonymous namespace)::DocumentWinner&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, snowseek::storage::(anonymous namespace)::DocumentWinner&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt;, true&gt;::operator[] (1,000,000 cpu-cycles, 0.01%)</title><rect x="1143.8" y="157" width="0.1" height="15.0" fill="rgb(242,146,41)" rx="2" ry="2" />
+<text  x="1146.83" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::cli::run (9,619,000,000 cpu-cycles, 85.35%)</title><rect x="139.7" y="253" width="1007.2" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="142.73" y="263.5" >snowseek::cli::run</text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (8,000,000 cpu-cycles, 0.07%)</title><rect x="778.4" y="125" width="0.9" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="781.41" y="135.5" ></text>
+</g>
+<g >
+<title>std::_Hash_bytes (31,000,000 cpu-cycles, 0.28%)</title><rect x="582.5" y="125" width="3.3" height="15.0" fill="rgb(238,146,36)" rx="2" ry="2" />
+<text  x="585.51" y="135.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, snowseek::document::DocumentMeta const*&gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, snowseek::document::DocumentMeta const*&gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_find_before_node (1,000,000 cpu-cycles, 0.01%)</title><rect x="1144.7" y="205" width="0.1" height="15.0" fill="rgb(250,146,49)" rx="2" ry="2" />
+<text  x="1147.66" y="215.5" ></text>
+</g>
+<g >
+<title>cfree@GLIBC_2.2.5 (12,000,000 cpu-cycles, 0.11%)</title><rect x="837.6" y="141" width="1.2" height="15.0" fill="rgb(246,123,45)" rx="2" ry="2" />
+<text  x="840.57" y="151.5" ></text>
+</g>
+<g >
+<title>[unknown] (14,000,000 cpu-cycles, 0.12%)</title><rect x="553.1" y="93" width="1.5" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="556.09" y="103.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe (1,000,000 cpu-cycles, 0.01%)</title><rect x="524.3" y="61" width="0.1" height="15.0" fill="rgb(235,151,33)" rx="2" ry="2" />
+<text  x="527.30" y="71.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (70,000,000 cpu-cycles, 0.62%)</title><rect x="459.6" y="157" width="7.3" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="462.59" y="167.5" ></text>
+</g>
+<g >
+<title>_int_malloc (101,000,000 cpu-cycles, 0.90%)</title><rect x="1146.9" y="269" width="10.5" height="15.0" fill="rgb(238,153,36)" rx="2" ry="2" />
+<text  x="1149.86" y="279.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (120,000,000 cpu-cycles, 1.06%)</title><rect x="894.8" y="109" width="12.6" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="897.84" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::with_active_segments&lt;snowseek::storage::LoadedIndex, snowseek::storage::read_index_directory (5,979,000,000 cpu-cycles, 53.05%)</title><rect x="518.6" y="189" width="626.1" height="15.0" fill="rgb(246,180,45)" rx="2" ry="2" />
+<text  x="521.65" y="199.5" >snowseek::storage::(anonymous namespace)::with_active_segments&lt;snowseek::storage::Load..</text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (1,015,000,000 cpu-cycles, 9.01%)</title><rect x="32.9" y="253" width="106.3" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="35.93" y="263.5" >std::istream:..</text>
+</g>
+<g >
+<title>std::basic_filebuf&lt;char, std::char_traits&lt;char&gt; &gt;::xsgetn (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.3" y="253" width="0.1" height="15.0" fill="rgb(244,146,43)" rx="2" ry="2" />
+<text  x="35.30" y="263.5" ></text>
+</g>
+<g >
+<title>malloc (1,000,000 cpu-cycles, 0.01%)</title><rect x="243.1" y="173" width="0.1" height="15.0" fill="rgb(238,112,36)" rx="2" ry="2" />
+<text  x="246.07" y="183.5" ></text>
+</g>
+<g >
+<title>[unknown] (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.8" y="237" width="0.1" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="13.84" y="247.5" ></text>
+</g>
+<g >
+<title>__memcmp_avx2_movbe (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.3" y="157" width="0.1" height="15.0" fill="rgb(235,151,33)" rx="2" ry="2" />
+<text  x="147.33" y="167.5" ></text>
+</g>
+<g >
+<title>std::basic_filebuf&lt;char, std::char_traits&lt;char&gt; &gt;::~basic_filebuf (2,000,000 cpu-cycles, 0.02%)</title><rect x="32.4" y="253" width="0.2" height="15.0" fill="rgb(242,146,41)" rx="2" ry="2" />
+<text  x="35.41" y="263.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (2,000,000 cpu-cycles, 0.02%)</title><rect x="524.2" y="125" width="0.2" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="527.20" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::add_occurrence (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.2" y="173" width="0.1" height="15.0" fill="rgb(251,180,51)" rx="2" ry="2" />
+<text  x="147.23" y="183.5" ></text>
+</g>
+<g >
+<title>sysmalloc (2,000,000 cpu-cycles, 0.02%)</title><rect x="1186.8" y="269" width="0.2" height="15.0" fill="rgb(238,167,36)" rx="2" ry="2" />
+<text  x="1189.75" y="279.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt;::_M_realloc_insert&lt;snowseek::index::Posting&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.2" y="157" width="0.1" height="15.0" fill="rgb(245,146,44)" rx="2" ry="2" />
+<text  x="147.23" y="167.5" ></text>
+</g>
+<g >
+<title>std::istream::get (5,000,000 cpu-cycles, 0.04%)</title><rect x="1186.1" y="269" width="0.5" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="1189.13" y="279.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::sorted_terms[abi:cxx11] (4,000,000 cpu-cycles, 0.04%)</title><rect x="524.0" y="141" width="0.4" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="526.99" y="151.5" ></text>
+</g>
+<g >
+<title>__GI___libc_open (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.8" y="253" width="0.1" height="15.0" fill="rgb(250,119,49)" rx="2" ry="2" />
+<text  x="13.84" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (29,000,000 cpu-cycles, 0.26%)</title><rect x="1137.6" y="141" width="3.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="1140.65" y="151.5" ></text>
+</g>
+<g >
+<title>[snowseek] (7,000,000 cpu-cycles, 0.06%)</title><rect x="533.5" y="141" width="0.7" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="536.51" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::append_posting (3,000,000 cpu-cycles, 0.03%)</title><rect x="587.4" y="141" width="0.3" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="590.44" y="151.5" ></text>
+</g>
+<g >
+<title>_int_free (10,000,000 cpu-cycles, 0.09%)</title><rect x="141.0" y="205" width="1.0" height="15.0" fill="rgb(246,153,46)" rx="2" ry="2" />
+<text  x="143.98" y="215.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::validate_index_file (6,000,000 cpu-cycles, 0.05%)</title><rect x="145.2" y="173" width="0.6" height="15.0" fill="rgb(237,180,35)" rx="2" ry="2" />
+<text  x="148.17" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_validated_header (761,000,000 cpu-cycles, 6.75%)</title><rect x="605.4" y="141" width="79.7" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="608.44" y="151.5" >snowseek:..</text>
+</g>
+<g >
+<title>std::istream::get (553,000,000 cpu-cycles, 4.91%)</title><rect x="940.1" y="109" width="57.9" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="943.07" y="119.5" >std::i..</text>
+</g>
+<g >
+<title>std::istream::get (253,000,000 cpu-cycles, 2.24%)</title><rect x="806.8" y="125" width="26.5" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="809.79" y="135.5" >s..</text>
+</g>
+<g >
+<title>_int_free (10,000,000 cpu-cycles, 0.09%)</title><rect x="836.5" y="141" width="1.1" height="15.0" fill="rgb(246,153,46)" rx="2" ry="2" />
+<text  x="839.52" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::index::IndexBuilder::update (9,619,000,000 cpu-cycles, 85.35%)</title><rect x="139.7" y="221" width="1007.2" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="142.73" y="231.5" >snowseek::index::IndexBuilder::update</text>
+</g>
+<g >
+<title>std::istream::get (1,000,000 cpu-cycles, 0.01%)</title><rect x="244.5" y="141" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="247.53" y="151.5" ></text>
+</g>
+<g >
+<title>[unknown] (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.4" y="221" width="0.1" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="35.41" y="231.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::detail::append_remapped_postings (2,975,000,000 cpu-cycles, 26.40%)</title><rect x="524.4" y="157" width="311.5" height="15.0" fill="rgb(240,180,39)" rx="2" ry="2" />
+<text  x="527.40" y="167.5" >snowseek::storage::detail::append_remappe..</text>
+</g>
+<g >
+<title>std::istream::get (586,000,000 cpu-cycles, 5.20%)</title><rect x="392.8" y="157" width="61.3" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="395.79" y="167.5" >std::i..</text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::postings_for (267,000,000 cpu-cycles, 2.37%)</title><rect x="554.6" y="125" width="27.9" height="15.0" fill="rgb(242,180,41)" rx="2" ry="2" />
+<text  x="557.56" y="135.5" >s..</text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (1,000,000 cpu-cycles, 0.01%)</title><rect x="145.5" y="141" width="0.1" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="148.49" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::index::builder_detail::commit_document (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.2" y="189" width="0.1" height="15.0" fill="rgb(241,180,39)" rx="2" ry="2" />
+<text  x="147.23" y="199.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (14,000,000 cpu-cycles, 0.12%)</title><rect x="1056.5" y="125" width="1.5" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="1059.50" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek (11,270,000,000 cpu-cycles, 100.00%)</title><rect x="10.0" y="285" width="1180.0" height="15.0" fill="rgb(237,180,35)" rx="2" ry="2" />
+<text  x="13.00" y="295.5" >snowseek</text>
+</g>
+<g >
+<title>snowseek::storage::detail::IndexDirectoryTransaction::IndexDirectoryTransaction (3,012,000,000 cpu-cycles, 26.73%)</title><rect x="203.3" y="205" width="315.3" height="15.0" fill="rgb(247,180,46)" rx="2" ry="2" />
+<text  x="206.28" y="215.5" >snowseek::storage::detail::IndexDirectoryT..</text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (2,000,000 cpu-cycles, 0.02%)</title><rect x="144.5" y="125" width="0.3" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="147.54" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::require_write (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.4" y="173" width="0.1" height="15.0" fill="rgb(240,180,38)" rx="2" ry="2" />
+<text  x="149.43" y="183.5" ></text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (3,000,000 cpu-cycles, 0.03%)</title><rect x="1056.2" y="109" width="0.3" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="1059.19" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (761,000,000 cpu-cycles, 6.75%)</title><rect x="1058.0" y="125" width="79.6" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="1060.97" y="135.5" >snowseek:..</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_rehash (2,000,000 cpu-cycles, 0.02%)</title><rect x="570.0" y="93" width="0.2" height="15.0" fill="rgb(241,146,40)" rx="2" ry="2" />
+<text  x="572.95" y="103.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (2,000,000 cpu-cycles, 0.02%)</title><rect x="145.0" y="125" width="0.2" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="147.96" y="135.5" ></text>
+</g>
+<g >
+<title>__memmove_avx_unaligned_erms (11,000,000 cpu-cycles, 0.10%)</title><rect x="568.8" y="109" width="1.2" height="15.0" fill="rgb(231,151,28)" rx="2" ry="2" />
+<text  x="571.80" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_validated_header (2,000,000 cpu-cycles, 0.02%)</title><rect x="144.5" y="141" width="0.3" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="147.54" y="151.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (2,000,000 cpu-cycles, 0.02%)</title><rect x="587.2" y="125" width="0.2" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="590.23" y="135.5" ></text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::_List::_List (1,000,000 cpu-cycles, 0.01%)</title><rect x="10.2" y="237" width="0.1" height="15.0" fill="rgb(232,146,30)" rx="2" ry="2" />
+<text  x="13.21" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (3,000,000 cpu-cycles, 0.03%)</title><rect x="209.4" y="189" width="0.3" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="212.35" y="199.5" ></text>
+</g>
+<g >
+<title>operator new (13,000,000 cpu-cycles, 0.12%)</title><rect x="243.2" y="173" width="1.3" height="15.0" fill="rgb(235,195,33)" rx="2" ry="2" />
+<text  x="246.17" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (1,097,000,000 cpu-cycles, 9.73%)</title><rect x="883.5" y="125" width="114.9" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="886.54" y="135.5" >snowseek::stor..</text>
+</g>
+<g >
+<title>_int_free (192,000,000 cpu-cycles, 1.70%)</title><rect x="12.1" y="253" width="20.1" height="15.0" fill="rgb(246,153,46)" rx="2" ry="2" />
+<text  x="15.09" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::validate_index_file (2,950,000,000 cpu-cycles, 26.18%)</title><rect x="209.7" y="189" width="308.8" height="15.0" fill="rgb(237,180,35)" rx="2" ry="2" />
+<text  x="212.67" y="199.5" >snowseek::storage::validate_index_file</text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (140,000,000 cpu-cycles, 1.24%)</title><rect x="244.7" y="173" width="14.7" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="247.74" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (542,000,000 cpu-cycles, 4.81%)</title><rect x="146.5" y="205" width="56.8" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="149.53" y="215.5" >snowse..</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt;, std::allocator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt; &gt; &gt;, std::__detail::_Select1st, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, std::__detail::_Mod_range_hashing, std::__detail::_Default_ranged_hash, std::__detail::_Prime_rehash_policy, std::__detail::_Hashtable_traits&lt;true, false, true&gt; &gt;::_M_emplace&lt;std::piecewise_construct_t const&amp;, std::tuple&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&amp;&gt;, std::tuple&lt;std::vector&lt;snowseek::index::Posting, std::allocator&lt;snowseek::index::Posting&gt; &gt;&amp;&amp;&gt; &gt; (2,000,000 cpu-cycles, 0.02%)</title><rect x="570.0" y="109" width="0.2" height="15.0" fill="rgb(239,146,37)" rx="2" ry="2" />
+<text  x="572.95" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::index::builder_detail::publish_candidate (14,000,000 cpu-cycles, 0.12%)</title><rect x="144.3" y="189" width="1.5" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="147.33" y="199.5" ></text>
+</g>
+<g >
+<title>[snowseek] (4,000,000 cpu-cycles, 0.04%)</title><rect x="564.2" y="109" width="0.4" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="567.19" y="119.5" ></text>
+</g>
+<g >
+<title>malloc (199,000,000 cpu-cycles, 1.77%)</title><rect x="1157.4" y="269" width="20.9" height="15.0" fill="rgb(238,112,36)" rx="2" ry="2" />
+<text  x="1160.44" y="279.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (169,000,000 cpu-cycles, 1.50%)</title><rect x="716.1" y="125" width="17.7" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="719.12" y="135.5" ></text>
+</g>
+<g >
+<title>[unknown] (2,000,000 cpu-cycles, 0.02%)</title><rect x="32.4" y="237" width="0.2" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="35.41" y="247.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (2,000,000 cpu-cycles, 0.02%)</title><rect x="145.2" y="141" width="0.2" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="148.17" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::load_active_segments (5,979,000,000 cpu-cycles, 53.05%)</title><rect x="518.6" y="173" width="626.1" height="15.0" fill="rgb(238,180,36)" rx="2" ry="2" />
+<text  x="521.65" y="183.5" >snowseek::storage::(anonymous namespace)::load_active_segments</text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (1,000,000 cpu-cycles, 0.01%)</title><rect x="144.8" y="125" width="0.1" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="147.75" y="135.5" ></text>
+</g>
+<g >
+<title>[unknown] (1,000,000 cpu-cycles, 0.01%)</title><rect x="549.8" y="109" width="0.2" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="552.85" y="119.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (899,000,000 cpu-cycles, 7.98%)</title><rect x="685.1" y="141" width="94.2" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="688.12" y="151.5" >snowseek::s..</text>
+</g>
+<g >
+<title>[snowseek] (40,000,000 cpu-cycles, 0.35%)</title><rect x="466.9" y="157" width="4.2" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="469.92" y="167.5" ></text>
+</g>
+<g >
+<title>std::istream::seekg (1,000,000 cpu-cycles, 0.01%)</title><rect x="1186.6" y="269" width="0.2" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="1189.65" y="279.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (17,000,000 cpu-cycles, 0.15%)</title><rect x="1141.9" y="157" width="1.8" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="1144.94" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (1,000,000 cpu-cycles, 0.01%)</title><rect x="244.5" y="157" width="0.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="247.53" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (237,000,000 cpu-cycles, 2.10%)</title><rect x="915.3" y="109" width="24.8" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="918.26" y="119.5" >s..</text>
+</g>
+<g >
+<title>[unknown] (5,000,000 cpu-cycles, 0.04%)</title><rect x="1186.1" y="237" width="0.5" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1189.13" y="247.5" ></text>
+</g>
+<g >
+<title>std::istream::sentry::sentry (4,000,000 cpu-cycles, 0.04%)</title><rect x="998.0" y="109" width="0.4" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="1000.98" y="119.5" ></text>
+</g>
+<g >
+<title>std::__basic_file&lt;char&gt;::fd (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.2" y="253" width="0.1" height="15.0" fill="rgb(244,146,43)" rx="2" ry="2" />
+<text  x="35.20" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::finish_logical_stats (45,000,000 cpu-cycles, 0.40%)</title><rect x="519.7" y="157" width="4.7" height="15.0" fill="rgb(239,180,37)" rx="2" ry="2" />
+<text  x="522.69" y="167.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;unsigned int, std::allocator&lt;unsigned int&gt; &gt;::reserve (1,000,000 cpu-cycles, 0.01%)</title><rect x="518.5" y="189" width="0.1" height="15.0" fill="rgb(240,146,38)" rx="2" ry="2" />
+<text  x="521.54" y="199.5" ></text>
+</g>
+<g >
+<title>malloc (2,000,000 cpu-cycles, 0.02%)</title><rect x="534.2" y="141" width="0.3" height="15.0" fill="rgb(238,112,36)" rx="2" ry="2" />
+<text  x="537.25" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u32_le (21,000,000 cpu-cycles, 0.19%)</title><rect x="207.2" y="189" width="2.2" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="210.16" y="199.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::find (2,000,000 cpu-cycles, 0.02%)</title><rect x="146.0" y="173" width="0.2" height="15.0" fill="rgb(248,180,48)" rx="2" ry="2" />
+<text  x="149.01" y="183.5" ></text>
+</g>
+<g >
+<title>snowseek::document::TextReader::read (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="189" width="0.1" height="15.0" fill="rgb(241,180,40)" rx="2" ry="2" />
+<text  x="14.88" y="199.5" ></text>
+</g>
+<g >
+<title>_dl_lookup_symbol_x (1,000,000 cpu-cycles, 0.01%)</title><rect x="12.0" y="221" width="0.1" height="15.0" fill="rgb(247,184,46)" rx="2" ry="2" />
+<text  x="14.99" y="231.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.3" y="141" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="149.32" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::decode_terms_and_postings&lt;snowseek::storage::detail::load_document_table (2,093,000,000 cpu-cycles, 18.57%)</title><rect x="838.8" y="141" width="219.2" height="15.0" fill="rgb(241,180,40)" rx="2" ry="2" />
+<text  x="841.83" y="151.5" >snowseek::storage::(anonymou..</text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (1,000,000 cpu-cycles, 0.01%)</title><rect x="244.6" y="157" width="0.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="247.64" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_validated_header (762,000,000 cpu-cycles, 6.76%)</title><rect x="259.4" y="173" width="79.8" height="15.0" fill="rgb(243,180,41)" rx="2" ry="2" />
+<text  x="262.40" y="183.5" >snowseek:..</text>
+</g>
+<g >
+<title>std::istream::get (1,000,000 cpu-cycles, 0.01%)</title><rect x="145.7" y="141" width="0.1" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="148.69" y="151.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="146.3" y="125" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="149.32" y="135.5" ></text>
+</g>
+<g >
+<title>std::istream::get (277,000,000 cpu-cycles, 2.46%)</title><rect x="1027.2" y="109" width="29.0" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="1030.19" y="119.5" >st..</text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (117,000,000 cpu-cycles, 1.04%)</title><rect x="351.4" y="157" width="12.3" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="354.44" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::Crc32c::update (762,000,000 cpu-cycles, 6.76%)</title><rect x="259.4" y="157" width="79.8" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="262.40" y="167.5" >snowseek:..</text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;*, std::vector&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::allocator&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_less_iter&gt; (1,000,000 cpu-cycles, 0.01%)</title><rect x="524.3" y="77" width="0.1" height="15.0" fill="rgb(243,146,42)" rx="2" ry="2" />
+<text  x="527.30" y="87.5" ></text>
+</g>
+<g >
+<title>[unknown] (4,000,000 cpu-cycles, 0.04%)</title><rect x="139.3" y="253" width="0.4" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="142.31" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::append_posting (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.4" y="205" width="0.1" height="15.0" fill="rgb(243,180,42)" rx="2" ry="2" />
+<text  x="35.41" y="215.5" ></text>
+</g>
+<g >
+<title>std::_Function_handler&lt;std::unique_ptr&lt;std::__future_base::_Result_base, std::__future_base::_Result_base::_Deleter&gt;  (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="221" width="0.1" height="15.0" fill="rgb(239,146,38)" rx="2" ry="2" />
+<text  x="14.88" y="231.5" ></text>
+</g>
+<g >
+<title>std::istream::get (299,000,000 cpu-cycles, 2.65%)</title><rect x="485.5" y="157" width="31.3" height="15.0" fill="rgb(237,146,35)" rx="2" ry="2" />
+<text  x="488.46" y="167.5" >st..</text>
+</g>
+<g >
+<title>[unknown] (2,000,000 cpu-cycles, 0.02%)</title><rect x="1186.8" y="253" width="0.2" height="15.0" fill="rgb(242,180,40)" rx="2" ry="2" />
+<text  x="1189.75" y="263.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::(anonymous namespace)::read_byte (125,000,000 cpu-cycles, 1.11%)</title><rect x="870.4" y="125" width="13.1" height="15.0" fill="rgb(245,180,45)" rx="2" ry="2" />
+<text  x="873.45" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::index::InMemoryIndex::postings_for (3,000,000 cpu-cycles, 0.03%)</title><rect x="587.7" y="141" width="0.4" height="15.0" fill="rgb(242,180,41)" rx="2" ry="2" />
+<text  x="590.75" y="151.5" ></text>
+</g>
+<g >
+<title>[libstdc++.so.6.0.28] (71,000,000 cpu-cycles, 0.63%)</title><rect x="783.4" y="125" width="7.5" height="15.0" fill="rgb(247,147,46)" rx="2" ry="2" />
+<text  x="786.44" y="135.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (592,000,000 cpu-cycles, 5.25%)</title><rect x="454.8" y="173" width="62.0" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="457.78" y="183.5" >snowse..</text>
+</g>
+<g >
+<title>std::filesystem::__cxx11::path::_List::_Impl_deleter::operator (1,000,000 cpu-cycles, 0.01%)</title><rect x="32.6" y="253" width="0.1" height="15.0" fill="rgb(241,146,39)" rx="2" ry="2" />
+<text  x="35.62" y="263.5" ></text>
+</g>
+<g >
+<title>[snowseek] (6,000,000 cpu-cycles, 0.05%)</title><rect x="835.9" y="141" width="0.6" height="15.0" fill="rgb(237,190,35)" rx="2" ry="2" />
+<text  x="838.90" y="151.5" ></text>
+</g>
+<g >
+<title>snowseek::storage::read_u64_le (1,000,000 cpu-cycles, 0.01%)</title><rect x="145.7" y="157" width="0.1" height="15.0" fill="rgb(235,180,33)" rx="2" ry="2" />
+<text  x="148.69" y="167.5" ></text>
+</g>
+<g >
+<title>snowseek::analysis::TokenizerSession::push (1,000,000 cpu-cycles, 0.01%)</title><rect x="11.9" y="157" width="0.1" height="15.0" fill="rgb(236,180,34)" rx="2" ry="2" />
+<text  x="14.88" y="167.5" ></text>
+</g>
+<g >
+<title>operator new (6,000,000 cpu-cycles, 0.05%)</title><rect x="869.8" y="125" width="0.6" height="15.0" fill="rgb(235,195,33)" rx="2" ry="2" />
+<text  x="872.82" y="135.5" ></text>
+</g>
+<g >
+<title>std::basic_streambuf&lt;char, std::char_traits&lt;char&gt; &gt;::uflow (1,000,000 cpu-cycles, 0.01%)</title><rect x="733.8" y="125" width="0.1" height="15.0" fill="rgb(238,146,36)" rx="2" ry="2" />
+<text  x="736.81" y="135.5" ></text>
+</g>
+</g>
+</svg>
