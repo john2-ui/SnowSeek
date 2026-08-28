@@ -99,9 +99,10 @@ combine_loaded_index_with_segment(LoadedIndex base, LoadedSegment delta);
 /**
  * @brief Holds the directory writer lock and owns recovery/publication state.
  *
- * Construction validates the current generation, removes only recognized
- * SnowSeek leftovers, and chooses identifiers that cannot reuse an orphaned
- * SegmentId. The lock is released automatically when the object is destroyed.
+ * Construction loads the current Manifest, removes only recognized SnowSeek
+ * leftovers, and chooses identifiers that cannot reuse an orphaned SegmentId.
+ * Callers validate or load the selected Segments while the lock is held. The
+ * lock is released automatically when the object is destroyed.
  */
 class IndexDirectoryTransaction {
       public:
@@ -118,6 +119,24 @@ class IndexDirectoryTransaction {
         [[nodiscard]] const std::vector<SegmentId> &
         active_segments() const noexcept;
         [[nodiscard]] std::filesystem::path segment_path() const;
+
+        /**
+         * @brief Fully validates Segments selected by the locked generation.
+         *
+         * A legacy fixed Segment is intentionally left unread so rebuild can
+         * replace it through the normal Manifest commit protocol.
+         *
+         * @throws std::runtime_error If a selected v2 Segment is invalid.
+         */
+        void validate_current_segments() const;
+
+        /**
+         * @brief Loads the logical index selected by the locked generation.
+         * @return Visible documents, postings, and physical statistics.
+         * @throws std::runtime_error If no Manifest exists or a Segment is
+         * invalid.
+         */
+        [[nodiscard]] LoadedIndex read_current_index() const;
 
         /**
          * @brief Copies a candidate into a unique staging file in the locked

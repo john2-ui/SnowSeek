@@ -555,12 +555,11 @@ struct CurrentDirectoryState {
 };
 
 /**
- * @brief Loads and validates the generation protected by the writer lock.
+ * @brief Loads the generation protected by the writer lock.
  * @param directory Locked index directory.
  * @return Manifest state, or a recognized fixed legacy Segment awaiting
  * replacement.
- * @throws std::runtime_error If Manifest inspection or a selected v2 Segment
- * fails.
+ * @throws std::runtime_error If Manifest or legacy-path inspection fails.
  */
 [[nodiscard]] CurrentDirectoryState
 load_current_directory_state(const std::filesystem::path &directory) {
@@ -570,10 +569,6 @@ load_current_directory_state(const std::filesystem::path &directory) {
                 state.manifest = read_manifest_file(manifest_path);
                 state.active_segments = state.manifest->active_segments;
                 state.generation = state.manifest->generation;
-                for (const auto id : state.active_segments) {
-                        static_cast<void>(validate_index_file(
-                                directory / segment_file_name(id)));
-                }
                 return state;
         }
 
@@ -925,6 +920,31 @@ std::filesystem::path IndexDirectoryTransaction::segment_path() const {
         return directory_ / segment_file_name(segment_id_);
 }
 
+void IndexDirectoryTransaction::validate_current_segments() const {
+        if (current_generation_ == 0) {
+                return;
+        }
+        for (const auto id : active_segments_) {
+                static_cast<void>(validate_index_file(
+                        directory_ / segment_file_name(id)));
+        }
+}
+
+LoadedIndex IndexDirectoryTransaction::read_current_index() const {
+        if (current_generation_ == 0) {
+                throw std::runtime_error(
+                        active_segments_.empty()
+                                ? "index directory has no MANIFEST; rebuild the index"
+                                : "legacy index has no MANIFEST; rebuild the index");
+        }
+        std::vector<std::filesystem::path> paths;
+        paths.reserve(active_segments_.size());
+        for (const auto id : active_segments_) {
+                paths.push_back(directory_ / segment_file_name(id));
+        }
+        return load_active_segments(paths);
+}
+
 std::filesystem::path IndexDirectoryTransaction::stage_candidate(
         const std::filesystem::path &candidate) const {
         auto staging = create_segment_temporary(directory_);
@@ -954,8 +974,6 @@ std::vector<PublicationDiagnostic> IndexDirectoryTransaction::publish(
                 new_manifest = validate_publication_request(
                         manifest_bytes, generation_, segment_id_,
                         active_segments_);
-                static_cast<void>(validate_index_file(candidate));
-
                 // Persist the candidate before exposing its final name.
                 sync_file(candidate);
                 observe(PublishObservationPoint::candidate_synced);

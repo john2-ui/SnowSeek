@@ -6,6 +6,7 @@
 #pragma once
 
 #include "storage/index_file.hpp"
+#include "storage/index_header.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -23,6 +24,7 @@ struct LoadedDocumentTable {
         document::DocumentStore documents; ///< Physical records in local ID order.
         std::vector<std::uint64_t> token_counts; ///< Counts indexed by local document ID.
         SegmentStats stats; ///< Validated physical Segment totals.
+        IndexHeader header; ///< Validated envelope reused by the second decode pass.
         bool stores_positions{}; ///< Whether Posting offsets reference Position data.
 };
 

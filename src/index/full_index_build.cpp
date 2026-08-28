@@ -312,6 +312,8 @@ void publish_candidate(storage::detail::IndexDirectoryTransaction &publication,
                         staging_bytes, publication.segment_path().parent_path());
                 workspace.note_transient_peak(staging_bytes);
                 publishable_candidate = publication.stage_candidate(candidate);
+                static_cast<void>(
+                        storage::validate_index_file(publishable_candidate));
         } else {
                 workspace.require_additional(manifest_bytes.size());
                 workspace.note_transient_peak(manifest_bytes.size());
@@ -818,6 +820,7 @@ IndexBuilder::build(const std::filesystem::path &source,
 
         std::filesystem::create_directories(index_directory);
         storage::detail::IndexDirectoryTransaction publication(index_directory);
+        publication.validate_current_segments();
         const auto canonical_source = std::filesystem::weakly_canonical(source);
         const filesystem::Scanner scanner(
                 options_.in_memory_options.scan_options);

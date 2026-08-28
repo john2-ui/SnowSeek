@@ -5,6 +5,7 @@
 
 #include "storage/binary_codec.hpp"
 
+#include <array>
 #include <cstdint>
 #include <istream>
 #include <ostream>
@@ -16,20 +17,22 @@ namespace snowseek::storage {
 namespace {
 
 /**
- * @brief Reads one byte or reports a truncated encoded value.
- * @param input Source stream positioned at the byte.
+ * @brief Reads one complete fixed-width encoded value.
+ * @tparam Size Encoded width in bytes.
+ * @param input Source stream positioned at the value.
+ * @param bytes Destination byte buffer.
  * @param value_name Name included in the truncation diagnostic.
- * @return The byte converted to an unsigned integer.
- * @throws std::runtime_error If no byte is available.
+ * @throws std::runtime_error If the complete value is unavailable.
  */
-[[nodiscard]] std::uint8_t read_byte(std::istream &input,
-                                     std::string_view value_name) {
-        const int byte = input.get();
-        if (byte == std::char_traits<char>::eof()) {
+template <std::size_t Size>
+void read_bytes(std::istream &input, std::array<unsigned char, Size> &bytes,
+                std::string_view value_name) {
+        input.read(reinterpret_cast<char *>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        if (!input || static_cast<std::size_t>(input.gcount()) != bytes.size()) {
                 throw std::runtime_error("truncated " +
                                          std::string(value_name));
         }
-        return static_cast<std::uint8_t>(static_cast<unsigned char>(byte));
 }
 
 /**
@@ -46,35 +49,51 @@ void require_write(std::ostream &output) {
 } // namespace
 
 void write_u32_le(std::ostream &output, std::uint32_t value) {
-        for (unsigned int shift = 0; shift < 32; shift += 8) {
-                output.put(static_cast<char>((value >> shift) & 0xffU));
-        }
+        const std::array<char, 4> bytes{
+                static_cast<char>(value & 0xffU),
+                static_cast<char>((value >> 8U) & 0xffU),
+                static_cast<char>((value >> 16U) & 0xffU),
+                static_cast<char>((value >> 24U) & 0xffU),
+        };
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         require_write(output);
 }
 
 void write_u64_le(std::ostream &output, std::uint64_t value) {
-        for (unsigned int shift = 0; shift < 64; shift += 8) {
-                output.put(static_cast<char>((value >> shift) & 0xffU));
-        }
+        const std::array<char, 8> bytes{
+                static_cast<char>(value & 0xffU),
+                static_cast<char>((value >> 8U) & 0xffU),
+                static_cast<char>((value >> 16U) & 0xffU),
+                static_cast<char>((value >> 24U) & 0xffU),
+                static_cast<char>((value >> 32U) & 0xffU),
+                static_cast<char>((value >> 40U) & 0xffU),
+                static_cast<char>((value >> 48U) & 0xffU),
+                static_cast<char>((value >> 56U) & 0xffU),
+        };
+        output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
         require_write(output);
 }
 
 std::uint32_t read_u32_le(std::istream &input) {
-        std::uint32_t value = 0;
-        for (unsigned int shift = 0; shift < 32; shift += 8) {
-                value |= static_cast<std::uint32_t>(read_byte(input, "u32"))
-                         << shift;
-        }
-        return value;
+        std::array<unsigned char, 4> bytes{};
+        read_bytes(input, bytes, "u32");
+        return static_cast<std::uint32_t>(bytes[0]) |
+               (static_cast<std::uint32_t>(bytes[1]) << 8U) |
+               (static_cast<std::uint32_t>(bytes[2]) << 16U) |
+               (static_cast<std::uint32_t>(bytes[3]) << 24U);
 }
 
 std::uint64_t read_u64_le(std::istream &input) {
-        std::uint64_t value = 0;
-        for (unsigned int shift = 0; shift < 64; shift += 8) {
-                value |= static_cast<std::uint64_t>(read_byte(input, "u64"))
-                         << shift;
-        }
-        return value;
+        std::array<unsigned char, 8> bytes{};
+        read_bytes(input, bytes, "u64");
+        return static_cast<std::uint64_t>(bytes[0]) |
+               (static_cast<std::uint64_t>(bytes[1]) << 8U) |
+               (static_cast<std::uint64_t>(bytes[2]) << 16U) |
+               (static_cast<std::uint64_t>(bytes[3]) << 24U) |
+               (static_cast<std::uint64_t>(bytes[4]) << 32U) |
+               (static_cast<std::uint64_t>(bytes[5]) << 40U) |
+               (static_cast<std::uint64_t>(bytes[6]) << 48U) |
+               (static_cast<std::uint64_t>(bytes[7]) << 56U);
 }
 
 } // namespace snowseek::storage

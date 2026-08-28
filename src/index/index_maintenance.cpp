@@ -468,7 +468,7 @@ IndexBuilder::update(const std::filesystem::path &source,
 
         storage::detail::IndexDirectoryTransaction publication(index_directory);
         BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
-        auto current = storage::read_index_directory(index_directory);
+        auto current = publication.read_current_index();
         MemoryReservation current_memory(memory_budget);
         current_memory.resize(estimated_loaded_bytes(current));
         PersistentBuildResult result;
@@ -519,7 +519,7 @@ IndexBuilder::remove(const std::filesystem::path &index_directory,
         }
         storage::detail::IndexDirectoryTransaction publication(index_directory);
         BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
-        auto current = storage::read_index_directory(index_directory);
+        auto current = publication.read_current_index();
         MemoryReservation current_memory(memory_budget);
         current_memory.resize(estimated_loaded_bytes(current));
         PersistentBuildResult result;
@@ -559,7 +559,7 @@ PersistentBuildResult
 IndexBuilder::compact(const std::filesystem::path &index_directory) const {
         storage::detail::IndexDirectoryTransaction publication(index_directory);
         BuildMemoryBudget memory_budget(options_.memory_budget_bytes);
-        auto current = storage::read_index_directory(index_directory);
+        auto current = publication.read_current_index();
         MemoryReservation current_memory(memory_budget);
         current_memory.resize(estimated_loaded_bytes(current));
         PersistentBuildResult result;

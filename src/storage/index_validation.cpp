@@ -482,6 +482,7 @@ load_document_table(const std::filesystem::path &path) {
                 path, header, documents.token_counts, documents.stats,
                 [](const std::string &, const PostingRecord &,
                    std::vector<index::Position>) {});
+        documents.header = header;
         return documents;
 }
 
@@ -499,9 +500,8 @@ void append_remapped_postings(
                         "active Segments have different position capabilities");
         }
 
-        const auto header = read_validated_header(path);
         static_cast<void>(decode_terms_and_postings(
-                path, header, documents.token_counts, documents.stats,
+                path, documents.header, documents.token_counts, documents.stats,
                 [&document_remap, &target](
                         const std::string &term, const PostingRecord &posting,
                         std::vector<index::Position> positions) {
