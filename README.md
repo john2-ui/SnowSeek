@@ -131,6 +131,8 @@ cmake --build build-benchmark --parallel 2
 
 缓存定义、统计口径、参数和当前实测见
 [docs/memory-baseline.md](docs/memory-baseline.md)。
+火焰图分析和已完成的维护路径优化见
+[docs/optimization.md](docs/optimization.md)。
 Manifest v1 与 Segment v2 的统一磁盘契约见
 [docs/index-format.md](docs/index-format.md)。
 
