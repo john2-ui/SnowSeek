@@ -1,150 +1,157 @@
 # SnowSeek
 
-SnowSeek 是一个面向嵌入式 Linux 的零第三方运行依赖本地全文检索引擎，使用
-C++20 实现。项目当前已完成 M3 查询与排序闭环、M4 有界并行构建，以及 M5 的
-多 Segment 增量更新、删除、压缩和 POSIX 可靠发布。
+## 项目简介
 
-## 构建
+[English](README_EN.md)
+
+SnowSeek 是一个使用 C++20 编写、面向嵌入式 Linux 的本地全文检索引擎，无第三方
+运行依赖。它支持完整构建、增量更新、删除、压缩、布尔与短语查询、BM25 排序，以及
+基于不可变 Segment 和 Manifest 的可靠发布。
+
+## 构建方式
+
+需要 Linux、CMake 3.16 或更高版本，以及支持 C++20 的 GCC 或 Clang。
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-(cd build && ctest --output-on-failure)
-./build/snowseek --help
+cmake --build build --parallel 2
+./build/snowseek --version
 ```
 
-构建、维护并查询由 Manifest 激活的 Segment v2 索引：
+## 使用方式
+
+直接使用构建产物：
 
 ```bash
 ./build/snowseek index ./testdata --index ./snowseek-index
-./build/snowseek index ./testdata --index ./snowseek-index \
-  --temporary-space-limit 4GiB --merge-fan-in 16
-./build/snowseek index ./testdata --index ./snowseek-index \
-  --temporary-directory /mnt/snowseek-tmp
-./build/snowseek index ./testdata --index ./snowseek-index \
-  --profile minimal --memory-limit 128MiB --threads 1
-./build/snowseek update ./testdata --index ./snowseek-index --threads 2
-./build/snowseek remove ./snowseek-index --path '*.log' --path 'cache/**'
+./build/snowseek update ./testdata --index ./snowseek-index
+./build/snowseek remove ./snowseek-index --path '*.log'
 ./build/snowseek compact ./snowseek-index
-./build/snowseek query ./snowseek-index timeout --source ./testdata
-./build/snowseek query ./snowseek-index '"timeout retry"' --source ./testdata
 ./build/snowseek query ./snowseek-index \
-  '(timeout OR retry) AND extension:txt' --top-k 10 --jsonl --explain
+  '(timeout OR retry) AND extension:txt' --top-k 10
 ./build/snowseek stats ./snowseek-index
 ./build/snowseek verify ./snowseek-index
 ```
 
-首次构建写入 `segment-0000000000000001.idx` 和 `MANIFEST`；`update` 为新增、修改和
-缺失路径追加 delta Segment，`remove` 追加与大小写敏感 POSIX Glob 匹配的 Tombstone，
-`compact` 将当前可见 live 文档重写为一个 Segment。完全未变化或未匹配时为 no-op，
-不消耗 generation 或 SegmentId。活动 Segment 超过 16 个时会尝试自动压缩；自动压缩
-失败仍提交 delta、返回状态码 2 并输出维护诊断。被删除但仍在源目录中的文件会被后续
-`update` 重新加入。
+安装到当前机器后，可以直接使用 `snowseek`：
 
-Segment 保存相对源目录的文档路径、纳秒 mtime 和原始内容 CRC32C。CRC 仅用于普通
-变化检测，不是安全哈希。0.2 的读取命令只接受 Segment v2 + Manifest v1；Segment
-v1 或缺少 `MANIFEST` 的旧目录会明确要求重新构建。`index` 是安全迁移路径：新 v2
-Segment 和 Manifest 持久化后才清理旧固定 Segment，提交点前失败仍保留旧文件。若
-个别文件无法读取或分析，成功文档仍会发布，但 `index` 返回状态码 2 并输出诊断。
-`IndexWriter` 默认使用 Balanced：256 MiB 分类内存预算、2 个解析线程、128 MiB
-批次目标、fan-in 16 并保留 Position。Minimal 使用 128 MiB、单线程、32 MiB 批次、
-fan-in 4 且关闭 Position；Performance 使用 1 GiB、硬件线程数、512 MiB 批次和
-fan-in 32。显式 `--memory-limit`、`--threads`、`--merge-fan-in` 可覆盖档位。
+```bash
+./tools/install.sh
+snowseek --help
+./tools/uninstall.sh
+```
 
-构建默认在目标目录的私有工作区刷写临时 Segment，再多级归并为一个候选 Segment。
-`--temporary-directory <dir>` 可将 `index`、`update`、`remove` 和 `compact` 的工作区
-放入一个已存在目录。显式配置后，最终候选始终先复制回索引目录的
-`.snowseek-segment-*` 暂存文件，再以同文件系统 rename 发布；因此临时目录可以位于
-另一文件系统。临时空间默认不限额；
-`--temporary-space-limit` 接受字节或 `B`、`KiB`、`MiB`、`GiB`、`TiB`，按输入
-Segment 总大小保守预检 spool 与候选文件的最坏空间。使用外部临时目录时，逻辑峰值
-还包括“外部候选 + 索引目录候选副本 + Manifest”的重叠窗口，通常至少接近最终
-Segment 大小的两倍；构建文件检查临时文件系统，发布副本则单独检查索引文件系统，
-任一检查都可能早于实际磁盘耗尽而拒绝。
-维护命令按固定顺序输出 `outcome`、`revision`、`segments`，再输出命令相关计数：
-`index` 为 `indexed`、`failed`，`update` 为 `added`、`modified`、`removed`、
-`unchanged`、`failed`，`remove` 为 `matched`，`compact` 为
-`discarded_records`。最后依次输出 `memory_peak_bytes`、
-`temporary_peak_bytes`、`warning_count`。诊断继续写入 stderr；成功、带警告和致命
-错误的退出码分别为 0、2、1。查询、`stats` 和 `verify` 输出保持不变。
+安装目录默认为 `/usr/local/bin`，权限不足时脚本会调用 `sudo`。可通过
+`SNOWSEEK_BUILD_DIR` 指定构建目录，通过 `SNOWSEEK_INSTALL_DIR` 指定安装目录：
 
-逻辑内存预算不统计 allocator、线程栈、运行库、内核页和 writer 序列化缓冲，
-因此不是 RSS 配额；临时峰值也不等同于文件系统块配额。任意预算、持久化或校验失败
-都不会在 Manifest 提交点前替换已有索引，工作区会被清理。提交后的旧 Segment 清理
-失败不会回滚新 generation：CLI 返回状态码 2，下一次 writer 会重试清理。写入使用
-目录级 `flock`、文件/目录 `fsync` 和同目录原子 rename；查询无锁读取一个完整
-generation。下一次 writer 会清理索引目录内的 `.snowseek-segment-*` 发布残留；
-进程崩溃遗留在共享外部临时目录的 `.snowseek-build-*` 不会自动跨索引清理，以免删除
-其他 writer 的工作区。无 Position 索引仍支持词项、布尔和 BM25，短语查询会明确
-报错。
+```bash
+mkdir -p "$HOME/.local/bin"
+SNOWSEEK_INSTALL_DIR="$HOME/.local/bin" ./tools/install.sh
+SNOWSEEK_INSTALL_DIR="$HOME/.local/bin" ./tools/uninstall.sh
+```
 
-查询表达式支持括号、大小写不敏感的 `AND`、`OR`、`NOT`、双引号精确短语、
-`path:` Glob 和 `extension:` 精确扩展名过滤。相邻词项不会隐式连接，必须显式写
-`AND`。默认输出相对路径、BM25 分数以及可用的原文行号和片段；`--source <dir>`
-指定原语料根目录，`--paths-only` 保留每行一个路径的输出，`--jsonl` 输出结构化
-结果，`--explain` 增加逐词评分贡献。默认 Top-K 为 20，上限为 1000。
+自定义目录需要已经加入 `PATH`，才能省略可执行文件路径。
 
-## C++ API 0.2
+## 命令行参数
 
-0.2 有意收窄并破坏旧 C++ API。公开头文件只有
-`snowseek/index.hpp`、`snowseek/search.hpp` 和 `snowseek/version.hpp`：
+### 命令
 
-| 旧入口 | 0.2 入口 |
-|---|---|
-| `snowseek::index::IndexBuilder` | 绑定目录与资源选项的 `snowseek::IndexWriter`；调用 `rebuild`、`update`、`remove`、`compact` |
-| `snowseek::query::QueryEngine` | 使用 PImpl 隐藏加载结构的 `snowseek::Searcher` |
-| `snowseek::storage` 类型与校验函数 | `snowseek::validate_index(path) -> IndexStats` |
-| `snowseek::query::SearchResult` 的行号/空字符串约定 | `SearchHit::snippet` 的 `optional<SourceSnippet>` |
-| `snowseek/common/version.hpp` | `snowseek/version.hpp`，版本值为 `0.2.0` |
+| 命令 | 必须参数 | 示例 | 含义 |
+|---|---|---|---|
+| `index <source> --index <dir>` | 是 | `snowseek index ./docs --index ./index` | 完整构建或重建索引。 |
+| `update <source> --index <dir>` | 是 | `snowseek update ./docs --index ./index` | 为新增、修改和删除的路径发布增量 Segment。 |
+| `remove <index> --path <glob>` | 是 | `snowseek remove ./index --path '*.log'` | 使用大小写敏感的 POSIX Glob 发布 Tombstone；`--path` 可重复。 |
+| `compact <index>` | 是 | `snowseek compact ./index` | 将当前可见文档压缩为一个 Segment。 |
+| `query <index> <expression>` | 是 | `snowseek query ./index 'error AND retry'` | 执行查询并按 BM25 排序。 |
+| `stats <index>` | 是 | `snowseek stats ./index` | 校验索引并输出统计信息。 |
+| `verify <index>` | 是 | `snowseek verify ./index` | 完整校验索引。 |
+| `--help`、`-h` | 否 | `snowseek --help` | 显示帮助。 |
+| `--version` | 否 | `snowseek --version` | 显示版本。 |
 
-AST、Scanner、Tokenizer、DocumentStore、内存倒排结构、BM25、codec 和 Manifest
-均为 `src` 内部实现，不再通过公开头间接暴露。`IndexOptions` 只公开资源档位及
-`memory_limit_bytes`、`temporary_space_limit_bytes`、`temporary_directory`、
-`worker_threads`、`merge_fan_in` 五个可选覆盖项。`IndexResult` 将结果分为
-`IndexOutcome`、revision/活动 Segment、`ChangeCounts`、精简 `BuildMetrics` 和按
-`DiagnosticStage` 标记的统一诊断列表。`IndexStats` 的 `documents`、`terms`、
-`postings`、`positions` 是可见逻辑计数，`bytes`、`segments`、`tombstones` 是活动
-Segment 的物理计数。现有 Segment v2 + Manifest v1 字节保持兼容。
+### 索引选项
 
-测试不依赖第三方框架，并且在 Debug 和 Release 构建中都会执行显式检查。若需要将
-编译器警告视为错误，可在配置时增加 `-DSNOWSEEK_WARNINGS_AS_ERRORS=ON`。
+以下选项适用于 `index`、`update`、`remove` 和 `compact`。资源选项均为可选项且
+每项最多出现一次；`--index` 和 `--path` 的要求见下表。
 
-一键执行 GCC/Clang 的 Debug/Release 编译与测试矩阵：
+| 参数 | 必须 | 示例 | 含义 |
+|---|---|---|---|
+| `--index <dir>` | `index`、`update` 必须 | `--index ./index` | 指定目标索引目录。 |
+| `--path <glob>` | `remove` 至少一个 | `--path 'cache/**'` | 选择要删除的相对路径，可重复；应加引号避免 Shell 提前展开。 |
+| `--temporary-directory <dir>` | 否 | `--temporary-directory /mnt/tmp` | 将工作区放入已存在目录；发布前仍会把候选复制回索引目录并重新校验。 |
+| `--temporary-space-limit <size>` | 否 | `--temporary-space-limit 4GiB` | 限制逻辑临时空间；支持正整数以及 `B`、`KiB`、`MiB`、`GiB`、`TiB`。 |
+| `--memory-limit <size>` | 否 | `--memory-limit 256MiB` | 覆盖档位的逻辑构建内存上限，单位格式同上。 |
+| `--threads <N>` | 否 | `--threads 4` | 最多并行解析 N 个文件，N 必须大于 0。 |
+| `--profile <name>` | 否 | `--profile minimal` | 资源档位：`minimal`、`balanced` 或 `performance`；默认 `balanced`。 |
+| `--merge-fan-in <N>` | 否 | `--merge-fan-in 16` | 每组最多归并 N 个 Segment，N 至少为 2。 |
+
+资源档位：
+
+| 档位 | 内存 | 解析线程 | Merge fan-in | Position / 短语查询 |
+|---|---:|---:|---:|---|
+| `minimal` | 128 MiB | 1 | 4 | 不保存 / 不支持 |
+| `balanced` | 256 MiB | 2 | 16 | 保存 / 支持 |
+| `performance` | 1 GiB | 硬件线程数 | 32 | 保存 / 支持 |
+
+### 查询选项
+
+| 参数 | 必须 | 示例 | 含义 |
+|---|---|---|---|
+| `--source <dir>` | 否 | `--source ./docs` | 从原始语料读取命中行号和片段。 |
+| `--top-k <N>` | 否 | `--top-k 10` | 最多返回 N 条结果，默认 20，上限 1000。 |
+| `--jsonl` | 否 | `--jsonl` | 每条结果输出一个 JSON 对象；不能与 `--paths-only` 同时使用。 |
+| `--paths-only` | 否 | `--paths-only` | 每行只输出一个相对路径；不能与 `--jsonl` 或 `--explain` 同时使用。 |
+| `--explain` | 否 | `--explain` | 输出各查询词的 BM25 评分贡献。 |
+
+### 查询表达式
+
+| 表达式 | 示例 | 含义 |
+|---|---|---|
+| 词项 | `timeout` | 查询一个归一化词项。 |
+| 精确短语 | `"timeout retry"` | 按连续 Position 匹配；`minimal` 索引不支持。 |
+| `AND` | `timeout AND retry` | 同时满足两个表达式。 |
+| `OR` | `timeout OR retry` | 满足任一表达式。 |
+| `NOT` | `timeout AND NOT retry` | 排除后续表达式。 |
+| 括号 | `(timeout OR retry) AND failed` | 改变求值顺序。 |
+| 路径过滤 | `path:"src/*.cpp"` | 使用大小写敏感的 POSIX Glob 匹配索引相对路径。 |
+| 扩展名过滤 | `extension:cpp` | 大小写不敏感地精确匹配扩展名，可带前导点。 |
+
+`AND`、`OR`、`NOT` 大小写不敏感，优先级为 `NOT` > `AND` > `OR`。相邻词项
+不会隐式连接，必须显式使用布尔运算符。双引号值可用 `\"` 和 `\\` 转义引号和
+反斜杠。查询表达式最长 4096 字节，语法树深度上限为 32。
+
+## 测试命令
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+  -DSNOWSEEK_WARNINGS_AS_ERRORS=ON
+cmake --build build --parallel 2
+(cd build && ctest --output-on-failure)
+```
+
+执行 GCC/Clang × Debug/Release 测试矩阵：
 
 ```bash
 ./tools/test-matrix.sh
 ```
 
-可通过 `SNOWSEEK_BUILD_JOBS` 调整并行任务数，通过 `SNOWSEEK_BUILD_ROOT`
-指定构建产物目录。
+可通过 `SNOWSEEK_BUILD_JOBS` 设置并行任务数，通过 `SNOWSEEK_BUILD_ROOT` 设置矩阵
+构建目录。
 
-Linux 上可启用统一维护基准，测量完整构建、增量更新和压缩的冷/热文件缓存延迟、
-吞吐、索引体积和写放大：
+## Benchmark 命令
 
 ```bash
 cmake -S . -B build-benchmark -DCMAKE_BUILD_TYPE=Release \
   -DSNOWSEEK_BUILD_BENCHMARKS=ON
 cmake --build build-benchmark --parallel 2
+
+./build-benchmark/benchmarks/snowseek_tokenizer_benchmark
 ./build-benchmark/benchmarks/snowseek_index_builder_benchmark
 ./build-benchmark/benchmarks/snowseek_index_builder_benchmark --samples 100
 ```
 
-缓存定义、统计口径、参数和当前实测见
+索引维护 benchmark 仅在 Linux 构建；参数和统计口径见
 [docs/memory-baseline.md](docs/memory-baseline.md)。
-火焰图分析和已完成的维护路径优化见
-[docs/optimization.md](docs/optimization.md)。
-Manifest v1 与 Segment v2 的统一磁盘契约见
-[docs/index-format.md](docs/index-format.md)。
 
-## 目录
+## TODO
 
-- `include/snowseek/`：三个稳定的 0.2 公开头文件；
-- `src/`：核心实现与 CLI；
-- `tests/`：无第三方测试框架的单元和集成测试；
-- `benchmarks/`：可选性能基准；
-- `cmake/toolchains/`：嵌入式 Linux 交叉编译模板；
-- `docs/`：架构、格式、资源基线和后续计划；
-- `tools/`：索引检查、数据集生成等辅助工具；
-- `testdata/`：小型、可版本控制的测试语料。
-
-项目结构与后续 TODO 见 [docs/architecture.md](docs/architecture.md)。
+项目结构、设计说明和后续计划见 [docs/architecture.md](docs/architecture.md#后续-todo)。
