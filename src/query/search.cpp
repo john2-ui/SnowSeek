@@ -5,12 +5,12 @@
 
 #include "snowseek/search.hpp"
 
-#include "query/query_evaluator.hpp"
-#include "query/query_parser.hpp"
 #include "analysis/tokenizer.hpp"
 #include "document/document_store.hpp"
 #include "document/text_reader.hpp"
 #include "index/index.hpp"
+#include "query/query_evaluator.hpp"
+#include "query/query_parser.hpp"
 #include "ranking/bm25.hpp"
 #include "storage/index_file.hpp"
 
@@ -29,8 +29,8 @@ namespace {
 
 struct RankedDocument {
         document::DocumentId document_id{}; ///< Candidate document identifier.
-        double score{}; ///< BM25 relevance score.
-        std::string path_key; ///< Deterministic tie-break key.
+        double score{};                     ///< BM25 relevance score.
+        std::string path_key;               ///< Deterministic tie-break key.
 };
 
 struct SnippetReady final {};
@@ -77,54 +77,6 @@ find_posting(const index::PostingList &postings,
 }
 
 /**
- * @brief Collects scoreable terms outside effective negation.
- * @param node Query subtree to inspect.
- * @param negated Whether the subtree is under an odd number of NOT nodes.
- * @param terms Output vector receiving normalized terms.
- */
-void collect_positive_terms(const query::QueryNode &node, bool negated,
-                            std::vector<std::string> &terms) {
-        switch (node.kind) {
-        case query::QueryNodeKind::term:
-                if (!negated) {
-                        terms.push_back(node.value);
-                }
-                return;
-        case query::QueryNodeKind::phrase:
-                if (!negated) {
-                        terms.insert(terms.end(), node.terms.begin(),
-                                     node.terms.end());
-                }
-                return;
-        case query::QueryNodeKind::negation:
-                collect_positive_terms(*node.left, !negated, terms);
-                return;
-        case query::QueryNodeKind::conjunction:
-        case query::QueryNodeKind::disjunction:
-                collect_positive_terms(*node.left, negated, terms);
-                collect_positive_terms(*node.right, negated, terms);
-                return;
-        case query::QueryNodeKind::path_filter:
-        case query::QueryNodeKind::extension_filter:
-                return;
-        }
-}
-
-/**
- * @brief Returns sorted unique positive terms used for ranking and snippets.
- * @param query Parsed query tree.
- * @return Normalized terms in byte order.
- */
-[[nodiscard]] std::vector<std::string>
-positive_terms(const query::QueryNode &query) {
-        std::vector<std::string> terms;
-        collect_positive_terms(query, false, terms);
-        std::sort(terms.begin(), terms.end());
-        terms.erase(std::unique(terms.begin(), terms.end()), terms.end());
-        return terms;
-}
-
-/**
  * @brief Computes the mean indexed token count for BM25 normalization.
  * @param documents Corpus document table.
  * @return Mean token count, or zero for an empty corpus.
@@ -167,12 +119,12 @@ average_document_length(const document::DocumentStore &documents) {
  * @param explanation Optional output vector for score details.
  * @return Sum of BM25 contributions for present terms.
  */
-[[nodiscard]] double
-score_document(const document::DocumentStore &documents,
-               const index::InMemoryIndex &index,
-               document::DocumentId document_id,
-               const std::vector<std::string> &terms, double corpus_average,
-               std::vector<ScoreDetail> *explanation) {
+[[nodiscard]] double score_document(const document::DocumentStore &documents,
+                                    const index::InMemoryIndex &index,
+                                    document::DocumentId document_id,
+                                    const std::vector<std::string> &terms,
+                                    double corpus_average,
+                                    std::vector<ScoreDetail> *explanation) {
         const auto document_count =
                 checked_count(documents.size(), "document count");
         const auto document_length = documents.get(document_id).token_count;
@@ -194,9 +146,9 @@ score_document(const document::DocumentStore &documents,
                         document_count, corpus_average);
                 total += contribution;
                 if (explanation != nullptr) {
-                        explanation->push_back(ScoreDetail{
-                                term, frequency, document_frequency,
-                                contribution});
+                        explanation->push_back(ScoreDetail{term, frequency,
+                                                           document_frequency,
+                                                           contribution});
                 }
         }
         return total;
@@ -375,8 +327,8 @@ load_snippet(const std::filesystem::path &source_root,
                         }));
                 if (!pending_line.empty() &&
                     line_matches(pending_line, terms, tokenizer)) {
-                        result = SourceSnippet{
-                                line_number, truncate_snippet(pending_line)};
+                        result = SourceSnippet{line_number,
+                                               truncate_snippet(pending_line)};
                 }
         } catch (const SnippetReady &) {
                 return result;
@@ -397,7 +349,8 @@ class Searcher::Impl {
         explicit Impl(const std::filesystem::path &index_directory)
             : loaded(storage::read_index_directory(index_directory)) {}
 
-        storage::LoadedIndex loaded; ///< Stable index generation used by searches.
+        storage::LoadedIndex
+                loaded; ///< Stable index generation used by searches.
 };
 
 Searcher::Searcher(const std::filesystem::path &index_directory)
@@ -409,9 +362,8 @@ Searcher::Searcher(Searcher &&) noexcept = default;
 
 Searcher &Searcher::operator=(Searcher &&) noexcept = default;
 
-std::vector<SearchHit>
-Searcher::search(std::string_view expression,
-                 const SearchOptions &options) const {
+std::vector<SearchHit> Searcher::search(std::string_view expression,
+                                        const SearchOptions &options) const {
         if (impl_ == nullptr) {
                 throw std::logic_error("cannot use a moved-from searcher");
         }
@@ -422,16 +374,16 @@ Searcher::search(std::string_view expression,
         if (options.top_k == 0) {
                 return {};
         }
-        const auto matches = query::evaluate_query(
+        const auto evaluation = query::evaluate_query(
                 *parsed, impl_->loaded.documents, impl_->loaded.index);
-        const auto terms = positive_terms(*parsed);
         const double corpus_average =
                 average_document_length(impl_->loaded.documents);
 
         // Rank only visible matches and retain no more than Top-K.
-        const auto ranked = rank_documents(
-                matches, impl_->loaded.documents, impl_->loaded.index, terms,
-                corpus_average, options.top_k);
+        const auto ranked =
+                rank_documents(evaluation.documents, impl_->loaded.documents,
+                               impl_->loaded.index, evaluation.positive_terms,
+                               corpus_average, options.top_k);
 
         // Explanation and source I/O are presentation work for final hits only.
         std::vector<SearchHit> hits;
@@ -445,12 +397,14 @@ Searcher::search(std::string_view expression,
                 if (options.explain) {
                         static_cast<void>(score_document(
                                 impl_->loaded.documents, impl_->loaded.index,
-                                ranked_document.document_id, terms,
-                                corpus_average, &hit.explanation));
+                                ranked_document.document_id,
+                                evaluation.positive_terms, corpus_average,
+                                &hit.explanation));
                 }
                 if (!options.source_root.empty()) {
-                        hit.snippet = load_snippet(options.source_root,
-                                                   document.path, terms);
+                        hit.snippet =
+                                load_snippet(options.source_root, document.path,
+                                             evaluation.positive_terms);
                 }
                 hits.push_back(std::move(hit));
         }

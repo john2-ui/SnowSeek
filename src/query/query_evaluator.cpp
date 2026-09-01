@@ -10,12 +10,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <fnmatch.h>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace snowseek::query {
@@ -119,14 +122,15 @@ find_posting(const index::PostingList &postings,
 }
 
 /**
- * @brief Tests exact adjacent positions for all terms in one phrase.
+ * @brief Tests ordered positions within one phrase's permitted extra span.
  * @param postings Phrase posting lists in source term order.
  * @param document_id Candidate document identifier.
- * @return True when at least one exact phrase occurrence exists.
+ * @param proximity Maximum positions beyond an exact adjacent phrase.
+ * @return True when at least one ordered phrase occurrence exists.
  */
 [[nodiscard]] bool
 phrase_matches(const std::vector<const index::PostingList *> &postings,
-               document::DocumentId document_id) {
+               document::DocumentId document_id, std::uint32_t proximity) {
         std::vector<const index::Posting *> document_postings;
         document_postings.reserve(postings.size());
         for (const auto *posting_list : postings) {
@@ -138,31 +142,70 @@ phrase_matches(const std::vector<const index::PostingList *> &postings,
         }
 
         for (const auto start : document_postings.front()->positions) {
+                auto previous = start;
                 bool complete = true;
                 for (std::size_t term_index = 1;
                      term_index < document_postings.size(); ++term_index) {
-                        if (start >
-                            std::numeric_limits<index::Position>::max() -
-                                    term_index) {
+                        const auto &positions =
+                                document_postings[term_index]->positions;
+                        const auto next = std::upper_bound(
+                                positions.begin(), positions.end(), previous);
+                        if (next == positions.end()) {
                                 complete = false;
                                 break;
                         }
-                        const auto expected = static_cast<index::Position>(
-                                start + term_index);
-                        if (!std::binary_search(document_postings[term_index]
-                                                        ->positions.begin(),
-                                                document_postings[term_index]
-                                                        ->positions.end(),
-                                                expected)) {
-                                complete = false;
-                                break;
-                        }
+                        previous = *next;
                 }
-                if (complete) {
+                const auto exact_span = document_postings.size() - 1;
+                if (complete &&
+                    static_cast<std::uint64_t>(previous) - start - exact_span <=
+                            proximity) {
                         return true;
                 }
         }
         return false;
+}
+
+/**
+ * @brief Applies one query comparison to scalar metadata values.
+ * @tparam Value Integer metadata type.
+ * @param candidate Document value.
+ * @param expected Query value.
+ * @param comparison Requested relation.
+ * @return True when the relation holds.
+ */
+template <typename Value>
+[[nodiscard]] bool compare(Value candidate, Value expected,
+                           ComparisonOperator comparison) {
+        switch (comparison) {
+        case ComparisonOperator::equal:
+                return candidate == expected;
+        case ComparisonOperator::not_equal:
+                return candidate != expected;
+        case ComparisonOperator::less:
+                return candidate < expected;
+        case ComparisonOperator::less_equal:
+                return candidate <= expected;
+        case ComparisonOperator::greater:
+                return candidate > expected;
+        case ComparisonOperator::greater_equal:
+                return candidate >= expected;
+        }
+        return false;
+}
+
+/**
+ * @brief Converts Epoch nanoseconds to a UTC day using floor division.
+ * @param nanoseconds Signed Unix Epoch nanoseconds.
+ * @return Day ordinal where 1970-01-01 is zero.
+ */
+[[nodiscard]] std::int64_t utc_day(std::int64_t nanoseconds) noexcept {
+        constexpr std::int64_t nanoseconds_per_day = 86400000000000LL;
+        auto day = nanoseconds / nanoseconds_per_day;
+        if (nanoseconds % nanoseconds_per_day < 0) {
+                --day;
+        }
+        return day;
 }
 
 /**
@@ -189,12 +232,32 @@ class Evaluator {
          */
         Evaluator(const document::DocumentStore &documents,
                   const index::InMemoryIndex &index)
-            : documents_(documents), index_(index) {
+            : documents_(documents), index_(index),
+              dictionary_terms_(index.sorted_terms()) {
                 universe_.reserve(documents.size());
                 for (std::size_t id = 0; id < documents.size(); ++id) {
                         universe_.push_back(
                                 static_cast<document::DocumentId>(id));
                 }
+        }
+
+        /**
+         * @brief Expands prefixes once, evaluates matches, and gathers scores.
+         * @param query Root query expression.
+         * @return Matching documents and sorted unique positive terms.
+         * @throws std::invalid_argument If prefix expansion exceeds its limit.
+         */
+        [[nodiscard]] QueryEvaluation run(const QueryNode &query) {
+                std::set<std::string> expanded_terms;
+                prepare_prefixes(query, expanded_terms);
+                std::vector<std::string> positive_terms;
+                collect_positive_terms(query, false, positive_terms);
+                std::sort(positive_terms.begin(), positive_terms.end());
+                positive_terms.erase(std::unique(positive_terms.begin(),
+                                                 positive_terms.end()),
+                                     positive_terms.end());
+                return QueryEvaluation{evaluate(query),
+                                       std::move(positive_terms)};
         }
 
         /**
@@ -206,12 +269,18 @@ class Evaluator {
                 switch (node.kind) {
                 case QueryNodeKind::term:
                         return evaluate_term(node.value);
+                case QueryNodeKind::prefix:
+                        return evaluate_prefix(node);
                 case QueryNodeKind::phrase:
-                        return evaluate_phrase(node.terms);
+                        return evaluate_phrase(node.terms, node.proximity);
                 case QueryNodeKind::path_filter:
                         return evaluate_path_filter(node.value);
                 case QueryNodeKind::extension_filter:
                         return evaluate_extension_filter(node.value);
+                case QueryNodeKind::size_filter:
+                        return evaluate_size_filter(node);
+                case QueryNodeKind::mtime_filter:
+                        return evaluate_mtime_filter(node);
                 case QueryNodeKind::conjunction:
                         return evaluate_conjunction(node);
                 case QueryNodeKind::disjunction:
@@ -236,12 +305,31 @@ class Evaluator {
         }
 
         /**
-         * @brief Evaluates an exact phrase using posting positions.
+         * @brief Unites posting lists for one previously expanded prefix.
+         * @param node Prefix AST node prepared by run().
+         * @return Ordered identifiers containing any expanded term.
+         */
+        [[nodiscard]] DocumentIds evaluate_prefix(const QueryNode &node) const {
+                DocumentIds matches;
+                const auto expansion = prefix_expansions_.find(&node);
+                if (expansion == prefix_expansions_.end()) {
+                        throw std::logic_error("prefix was not prepared");
+                }
+                for (const auto &term : expansion->second) {
+                        matches = union_ids(matches, evaluate_term(term));
+                }
+                return matches;
+        }
+
+        /**
+         * @brief Evaluates an ordered phrase using posting positions.
          * @param terms Phrase terms in source order.
-         * @return Ordered documents containing an adjacent occurrence.
+         * @param proximity Maximum positions beyond exact adjacency.
+         * @return Ordered documents containing a permitted occurrence.
          */
         [[nodiscard]] DocumentIds
-        evaluate_phrase(const std::vector<std::string> &terms) const {
+        evaluate_phrase(const std::vector<std::string> &terms,
+                        std::uint32_t proximity) const {
                 if (!index_.stores_positions()) {
                         throw std::invalid_argument(
                                 "index does not contain positions required for "
@@ -273,7 +361,8 @@ class Evaluator {
 
                 DocumentIds matches;
                 for (const auto document_id : candidates) {
-                        if (phrase_matches(posting_lists, document_id)) {
+                        if (phrase_matches(posting_lists, document_id,
+                                           proximity)) {
                                 matches.push_back(document_id);
                         }
                 }
@@ -323,6 +412,119 @@ class Evaluator {
         }
 
         /**
+         * @brief Evaluates a comparison against indexed source byte lengths.
+         * @param node Parsed size-filter node.
+         * @return Ordered documents satisfying the comparison.
+         */
+        [[nodiscard]] DocumentIds
+        evaluate_size_filter(const QueryNode &node) const {
+                DocumentIds matches;
+                for (const auto &document : documents_.all()) {
+                        if (compare(document.file_size, node.size_bytes,
+                                    node.comparison)) {
+                                matches.push_back(document.id);
+                        }
+                }
+                return matches;
+        }
+
+        /**
+         * @brief Evaluates a comparison against indexed UTC modification days.
+         * @param node Parsed mtime-filter node.
+         * @return Ordered documents satisfying the comparison.
+         */
+        [[nodiscard]] DocumentIds
+        evaluate_mtime_filter(const QueryNode &node) const {
+                DocumentIds matches;
+                for (const auto &document : documents_.all()) {
+                        if (compare(utc_day(document.modified_time_ns),
+                                    node.mtime_day, node.comparison)) {
+                                matches.push_back(document.id);
+                        }
+                }
+                return matches;
+        }
+
+        /**
+         * @brief Expands every prefix node and enforces the query-wide bound.
+         * @param node Query subtree to prepare.
+         * @param distinct_terms Concrete prefix terms seen across the query.
+         * @throws std::invalid_argument If more than 256 terms are expanded.
+         */
+        void prepare_prefixes(const QueryNode &node,
+                              std::set<std::string> &distinct_terms) {
+                if (node.kind == QueryNodeKind::prefix) {
+                        const auto first = std::lower_bound(
+                                dictionary_terms_.begin(),
+                                dictionary_terms_.end(), node.value);
+                        auto &expansion = prefix_expansions_[&node];
+                        for (auto term = first;
+                             term != dictionary_terms_.end() &&
+                             term->starts_with(node.value);
+                             ++term) {
+                                expansion.push_back(*term);
+                                distinct_terms.insert(*term);
+                                if (distinct_terms.size() >
+                                    kMaxExpandedPrefixTerms) {
+                                        throw std::invalid_argument(
+                                                "query prefix expansion "
+                                                "exceeds 256 distinct terms");
+                                }
+                        }
+                }
+                if (node.left != nullptr) {
+                        prepare_prefixes(*node.left, distinct_terms);
+                }
+                if (node.right != nullptr) {
+                        prepare_prefixes(*node.right, distinct_terms);
+                }
+        }
+
+        /**
+         * @brief Collects scoreable concrete terms outside effective NOT.
+         * @param node Query subtree to inspect.
+         * @param negated Whether an odd number of NOT nodes applies.
+         * @param terms Output receiving normalized concrete terms.
+         */
+        void collect_positive_terms(const QueryNode &node, bool negated,
+                                    std::vector<std::string> &terms) const {
+                switch (node.kind) {
+                case QueryNodeKind::term:
+                        if (!negated) {
+                                terms.push_back(node.value);
+                        }
+                        return;
+                case QueryNodeKind::prefix:
+                        if (!negated) {
+                                const auto &expansion =
+                                        prefix_expansions_.at(&node);
+                                terms.insert(terms.end(), expansion.begin(),
+                                             expansion.end());
+                        }
+                        return;
+                case QueryNodeKind::phrase:
+                        if (!negated) {
+                                terms.insert(terms.end(), node.terms.begin(),
+                                             node.terms.end());
+                        }
+                        return;
+                case QueryNodeKind::negation:
+                        collect_positive_terms(*node.left, !negated, terms);
+                        return;
+                case QueryNodeKind::conjunction:
+                case QueryNodeKind::disjunction:
+                        collect_positive_terms(*node.left, negated, terms);
+                        collect_positive_terms(*node.right, negated, terms);
+                        return;
+                case QueryNodeKind::path_filter:
+                case QueryNodeKind::extension_filter:
+                case QueryNodeKind::size_filter:
+                case QueryNodeKind::mtime_filter:
+                        return;
+                }
+        }
+
+        /**
          * @brief Evaluates flattened AND operands from most selective first.
          * @param node Conjunction subtree.
          * @return Ordered documents matching every operand.
@@ -356,6 +558,22 @@ class Evaluator {
                         const auto *postings = index_.find(node.value);
                         return postings == nullptr ? 0 : postings->size();
                 }
+                case QueryNodeKind::prefix: {
+                        std::size_t result = 0;
+                        for (const auto &term : prefix_expansions_.at(&node)) {
+                                const auto *postings = index_.find(term);
+                                if (postings == nullptr ||
+                                    result >=
+                                            documents_.size() -
+                                                    std::min(
+                                                            documents_.size(),
+                                                            postings->size())) {
+                                        return documents_.size();
+                                }
+                                result += postings->size();
+                        }
+                        return result;
+                }
                 case QueryNodeKind::phrase: {
                         std::size_t result = documents_.size();
                         for (const auto &term : node.terms) {
@@ -381,23 +599,29 @@ class Evaluator {
                 }
                 case QueryNodeKind::path_filter:
                 case QueryNodeKind::extension_filter:
+                case QueryNodeKind::size_filter:
+                case QueryNodeKind::mtime_filter:
                 case QueryNodeKind::negation:
                         return documents_.size();
                 }
                 return documents_.size();
         }
 
-        const document::DocumentStore &documents_; ///< Immutable visible corpus.
+        const document::DocumentStore
+                &documents_;                ///< Immutable visible corpus.
         const index::InMemoryIndex &index_; ///< Immutable visible postings.
-        DocumentIds universe_; ///< Every visible identifier in order.
+        std::vector<std::string> dictionary_terms_; ///< Sorted vocabulary copy.
+        std::unordered_map<const QueryNode *, std::vector<std::string>>
+                prefix_expansions_; ///< Concrete terms for each prefix node.
+        DocumentIds universe_;      ///< Every visible identifier in order.
 };
 
 } // namespace
 
-DocumentIds evaluate_query(const QueryNode &query,
-                           const document::DocumentStore &documents,
-                           const index::InMemoryIndex &index) {
-        return Evaluator(documents, index).evaluate(query);
+QueryEvaluation evaluate_query(const QueryNode &query,
+                               const document::DocumentStore &documents,
+                               const index::InMemoryIndex &index) {
+        return Evaluator(documents, index).run(query);
 }
 
 } // namespace snowseek::query

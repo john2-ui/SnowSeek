@@ -344,8 +344,8 @@ void reports_cli_failures() {
                 "recoverable document diagnostics should use stderr and a "
                 "stage label");
         snowseek::test::require_equal(
-                invoke({"snowseek", "query", destination.string(), "one two"}),
-                1, "implicit AND should fail");
+                invoke({"snowseek", "query", destination.string(), "one?"}), 1,
+                "unsupported wildcard syntax should fail");
         snowseek::test::require_equal(
                 invoke({"snowseek", "query", destination.string(), "safe",
                         "--jsonl", "--paths-only"}),
@@ -423,10 +423,9 @@ void runs_incremental_maintenance_commands() {
                 query.output, std::string{},
                 "a Tombstone should hide the removed path from queries");
 
-        const auto compact =
-                invoke_captured({"snowseek", "compact", destination.string(),
-                                 "--threads", "3", "--temporary-directory",
-                                 workspace_parent.string()});
+        const auto compact = invoke_captured(
+                {"snowseek", "compact", destination.string(), "--threads", "3",
+                 "--temporary-directory", workspace_parent.string()});
         snowseek::test::require(
                 compact.status == 0 &&
                         compact.output.find("outcome=compacted\n") == 0 &&

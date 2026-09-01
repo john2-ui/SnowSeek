@@ -86,17 +86,18 @@ Posting，并重新分配连续 DocumentId。自动压缩失败只产生维护�
 flowchart LR
     Load[加载稳定 generation]
     Parse[解析查询]
-    Evaluate[布尔与短语求值]
+    Evaluate[布尔、前缀、短语与元数据求值]
     Rank[BM25 + Top-K]
     Present[解释与原文片段]
 
     Load --> Parse --> Evaluate --> Rank --> Present
 ```
 
-`Searcher` 构造时加载一个不可变 generation。查询支持显式 `AND`、`OR`、
-`NOT`、括号、双引号短语、`path:` Glob 和 `extension:` 过滤。匹配文档按
-正向查询词的 BM25 之和排序，分数相同时按相对路径排序；评分解释和原文读取只针对
-最终 Top-K。
+`Searcher` 构造时加载一个不可变 generation。查询支持显式或隐式 `AND`、`OR`、
+`NOT`、括号、精确或有序邻近短语、末尾前缀，以及 `path:`、`extension:`、
+`size:` 和 `mtime:` 过滤。前缀直接从已加载的有序词典展开，整条查询最多产生 256
+个不同词项，不改变 Segment v2。匹配文档按正向具体词项的 BM25 之和排序，分数
+相同时按相对路径排序；评分解释和原文读取只针对最终 Top-K。
 
 Minimal 档位不保存 Position，因此仍支持词项、布尔、过滤和 BM25，但拒绝短语查询。
 

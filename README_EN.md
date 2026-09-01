@@ -63,11 +63,21 @@ snowseek stats|verify <index>
 and `performance`. `remove` requires at least one repeatable `--path` POSIX
 Glob.
 
-Queries accept terms, quoted phrases, case-insensitive `AND`, `OR`, and `NOT`,
-parentheses, case-sensitive `path:` POSIX Globs, and case-insensitive exact
-`extension:` filters. Precedence is `NOT` > `AND` > `OR`; adjacent operands
-require an explicit operator. Query options are `--source`, `--top-k`,
-`--jsonl`, `--paths-only`, and `--explain`.
+Queries accept terms, exact phrases, ordered proximity phrases such as
+`"timeout retry"~3`, and trailing prefix searches such as `time*`. Adjacent
+operands imply `AND`, including groups and `NOT`; precedence remains `NOT` >
+`AND` > `OR`. Prefix expansions contribute their concrete terms to BM25,
+snippets, and explanations, with a query-wide limit of 256 distinct expanded
+terms.
+
+Filters include case-sensitive `path:` POSIX Globs, case-insensitive exact
+`extension:`, byte sizes such as `size:>=1MiB`, and UTC civil dates such as
+`mtime:<2026-01-01`. Size and date filters accept `=`, `!=`, `<`, `<=`, `>`,
+and `>=`; an omitted operator means equality. Quote the complete shell
+expression when it contains `<` or `>`. Only one trailing `*` is supported;
+leading or middle wildcards, `?`, fuzzy terms, boosts, and Lucene bracket
+ranges are not supported. Query options are `--source`, `--top-k`, `--jsonl`,
+`--paths-only`, and `--explain`.
 
 See the Chinese [command-line tables](README.md#命令行参数) for required fields,
 examples, defaults, constraints, and expression details.

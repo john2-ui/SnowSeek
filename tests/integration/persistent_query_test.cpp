@@ -105,8 +105,8 @@ void evaluates_m3_query_language() {
         const auto destination = temporary.path() / "index";
         std::filesystem::create_directory(source);
         std::filesystem::create_directory(source / "sub");
-        write_file(source / "a.txt", "alpha beta alpha");
-        write_file(source / "b.md", "alpha gamma beta");
+        write_file(source / "a.txt", "alpha beta alpha alphabet");
+        write_file(source / "b.md", "alpha gamma beta alpine");
         write_file(source / "sub" / "c.TXT", "delta alpha beta");
         write_file(source / "sub" / "repeat.txt", "echo echo");
         static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
@@ -122,6 +122,12 @@ void evaluates_m3_query_language() {
         snowseek::test::require_equal(
                 engine.search("\"echo echo\"").size(), std::size_t{1},
                 "adjacent repeated term should match a phrase");
+        snowseek::test::require_equal(
+                engine.search("\"alpha beta\"~1").size(), std::size_t{3},
+                "ordered proximity should admit one extra position");
+        snowseek::test::require_equal(engine.search("alpha beta").size(),
+                                      std::size_t{3},
+                                      "adjacent terms should imply AND");
 
         const auto boolean =
                 engine.search("alpha AND (beta OR delta) AND NOT extension:md");
@@ -137,6 +143,23 @@ void evaluates_m3_query_language() {
         snowseek::test::require_equal(
                 extension[0].path, std::filesystem::path("b.md"),
                 "extension filter should retain its path");
+
+        snowseek::SearchOptions prefix_options;
+        prefix_options.source_root = source;
+        prefix_options.explain = true;
+        const auto prefix = engine.search("alp*", prefix_options);
+        const auto prefix_a = std::find_if(
+                prefix.begin(), prefix.end(), [](const auto &result) {
+                        return result.path == std::filesystem::path("a.txt");
+                });
+        snowseek::test::require(
+                prefix_a != prefix.end() && prefix_a->snippet.has_value() &&
+                        std::any_of(prefix_a->explanation.begin(),
+                                    prefix_a->explanation.end(),
+                                    [](const auto &detail) {
+                                            return detail.term == "alphabet";
+                                    }),
+                "prefix expansions should drive snippets and explanations");
 }
 
 /** @brief Verifies positionless indexes reject only phrase evaluation. */
@@ -159,6 +182,11 @@ void rejects_phrases_without_positions() {
                         static_cast<void>(engine.search("\"alpha beta\""));
                 },
                 "positionless indexes should reject phrase queries");
+        snowseek::test::require_throws<std::invalid_argument>(
+                [&engine] {
+                        static_cast<void>(engine.search("\"alpha beta\"~2"));
+                },
+                "positionless indexes should reject proximity queries");
 }
 
 /** @brief Verifies ranking is stable and score explanations sum exactly. */
@@ -246,9 +274,9 @@ void rejects_invalid_queries_and_options() {
         write_file(source / "a.txt", "one two three");
         static_cast<void>(snowseek::IndexWriter(destination).rebuild(source));
         const snowseek::Searcher engine(destination);
-        snowseek::test::require_throws<std::invalid_argument>(
-                [&engine] { static_cast<void>(engine.search("one two")); },
-                "implicit AND should be rejected");
+        snowseek::test::require_equal(
+                engine.search("one two").size(), std::size_t{1},
+                "implicit AND should be accepted by the public search API");
         snowseek::SearchOptions excessive;
         excessive.top_k = snowseek::kMaxTopK + 1;
         snowseek::test::require_throws<std::invalid_argument>(

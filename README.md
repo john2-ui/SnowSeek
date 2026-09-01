@@ -108,16 +108,26 @@ SNOWSEEK_INSTALL_DIR="$HOME/.local/bin" ./tools/uninstall.sh
 |---|---|---|
 | 词项 | `timeout` | 查询一个归一化词项。 |
 | 精确短语 | `"timeout retry"` | 按连续 Position 匹配；`minimal` 索引不支持。 |
+| 邻近短语 | `"timeout retry"~3` | 保持词序，允许相对精确短语多出最多 3 个 Position；`~0` 等同精确短语。 |
+| 前缀 | `time*` | 匹配所有以归一化前缀开头的词项并分别参与 BM25；只支持一个末尾 `*`。 |
 | `AND` | `timeout AND retry` | 同时满足两个表达式。 |
+| 隐式 `AND` | `timeout retry` | 相邻词项、过滤器、NOT 或括号组自动按 `AND` 连接。 |
 | `OR` | `timeout OR retry` | 满足任一表达式。 |
 | `NOT` | `timeout AND NOT retry` | 排除后续表达式。 |
 | 括号 | `(timeout OR retry) AND failed` | 改变求值顺序。 |
 | 路径过滤 | `path:"src/*.cpp"` | 使用大小写敏感的 POSIX Glob 匹配索引相对路径。 |
 | 扩展名过滤 | `extension:cpp` | 大小写不敏感地精确匹配扩展名，可带前导点。 |
+| 大小过滤 | `size:>=1MiB` | 按源文件字节数比较，支持 `= != < <= > >=` 和 `B`、`KiB`、`MiB`、`GiB`、`TiB`。 |
+| 修改日期过滤 | `mtime:<2026-01-01` | 按 `YYYY-MM-DD` 表示的 UTC 自然日比较，支持相同的六种运算符。 |
 
-`AND`、`OR`、`NOT` 大小写不敏感，优先级为 `NOT` > `AND` > `OR`。相邻词项
-不会隐式连接，必须显式使用布尔运算符。双引号值可用 `\"` 和 `\\` 转义引号和
-反斜杠。查询表达式最长 4096 字节，语法树深度上限为 32。
+`AND`、`OR`、`NOT` 大小写不敏感，优先级为 `NOT` > `AND`（含隐式）> `OR`。
+大小和日期省略运算符时按 `=` 处理；大小允许零。双引号值可用 `\"` 和 `\\`
+转义引号和反斜杠。Shell 中包含 `<` 或 `>` 时应引用完整表达式，例如
+`'size:>=1MiB mtime:<2026-01-01'`。
+
+整条查询最多展开 256 个不同的前缀词项，超限会报错而不会截断。不支持前置或中间
+`*`、`?`、模糊查询、Boost 和 Lucene 区间括号。查询表达式最长 4096 字节，语法树
+深度上限为 32。
 
 ## 测试命令
 
